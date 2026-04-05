@@ -10,7 +10,7 @@ interface MessageBubbleProps {
   message: ChatMessageType
 }
 
-export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
+export const MessageBubble = React.memo(function MessageBubble({ message }: MessageBubbleProps) {
   const settings = useSettingsStore((s) => s.settings)
   const [copied, setCopied] = useState(false)
 
@@ -110,4 +110,4 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
       </div>
     </div>
   )
-}
+})

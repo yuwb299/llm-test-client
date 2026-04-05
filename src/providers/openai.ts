@@ -1,6 +1,16 @@
 import { BaseProvider } from './base'
 import { ChatCompletionParams, ChatCompletionResponse, StreamChunk, ProviderConfig } from '@/types/provider'
 
+function buildProxyConfig(baseUrl: string, isLocal?: boolean): { urlPrefix: string; extraHeaders: Record<string, string> } {
+  if (isLocal && import.meta.env.DEV) {
+    return {
+      urlPrefix: '/api-proxy',
+      extraHeaders: { 'X-Proxy-Target': baseUrl },
+    }
+  }
+  return { urlPrefix: baseUrl, extraHeaders: {} }
+}
+
 export class OpenAIProvider extends BaseProvider {
   constructor(config: ProviderConfig) {
     super(config)
@@ -29,14 +39,18 @@ export class OpenAIProvider extends BaseProvider {
       body.stop = params.stop
     }
 
-    const res = await fetch(`${this.config.apiBaseUrl}/chat/completions`, {
+    const proxy = buildProxyConfig(this.config.apiBaseUrl, this.config.isLocal)
+
+    const res = await fetch(`${proxy.urlPrefix}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.config.apiKey}`,
+        ...proxy.extraHeaders,
         ...this.config.customHeaders,
       },
       body: JSON.stringify(body),
+      signal: params.signal,
     })
 
     if (!res.ok) {
@@ -75,14 +89,18 @@ export class OpenAIProvider extends BaseProvider {
       body.response_format = { type: 'json_object' }
     }
 
-    const res = await fetch(`${this.config.apiBaseUrl}/chat/completions`, {
+    const proxy = buildProxyConfig(this.config.apiBaseUrl, this.config.isLocal)
+
+    const res = await fetch(`${proxy.urlPrefix}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.config.apiKey}`,
+        ...proxy.extraHeaders,
         ...this.config.customHeaders,
       },
       body: JSON.stringify(body),
+      signal: params.signal,
     })
 
     if (!res.ok) {

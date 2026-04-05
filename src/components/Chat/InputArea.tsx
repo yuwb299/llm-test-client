@@ -21,7 +21,7 @@ export const InputArea: React.FC<InputAreaProps> = ({ onSend }) => {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const settings = useSettingsStore((s) => s.settings)
-  const { isStreaming } = useChatStore()
+  const { isStreaming, abortController } = useChatStore()
 
   const skills = skillRegistry.getAll()
 
@@ -44,6 +44,10 @@ export const InputArea: React.FC<InputAreaProps> = ({ onSend }) => {
     },
     [text, settings.sendOnEnter]
   )
+
+  const handleStop = useCallback(() => {
+    abortController?.abort()
+  }, [abortController])
 
   const handleSend = useCallback(() => {
     if ((!text.trim() && attachments.length === 0) || isStreaming) return
@@ -184,8 +188,8 @@ export const InputArea: React.FC<InputAreaProps> = ({ onSend }) => {
         </div>
 
         <button
-          onClick={isStreaming ? undefined : handleSend}
-          disabled={(!text.trim() && attachments.length === 0) || isStreaming}
+          onClick={isStreaming ? handleStop : handleSend}
+          disabled={isStreaming ? false : (!text.trim() && attachments.length === 0)}
           className={`p-2.5 rounded-lg transition-colors ${
             isStreaming
               ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'

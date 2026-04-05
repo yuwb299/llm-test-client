@@ -6,6 +6,7 @@ export interface ProviderConfig {
   apiKey: string
   models: ModelInfo[]
   enabled: boolean
+  isLocal?: boolean
   customHeaders?: Record<string, string>
 }
 
@@ -40,6 +41,7 @@ export interface ChatCompletionParams {
   tools?: MCPServerTool[]
   jsonMode?: boolean
   systemPrompt?: string
+  signal?: AbortSignal
 }
 
 export interface ChatCompletionResponse {

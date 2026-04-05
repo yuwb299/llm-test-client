@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react'
+import React, { useRef, useEffect, useCallback } from 'react'
 import { ChatMessage } from '@/types/message'
 import { MessageBubble } from './MessageBubble'
 
@@ -8,11 +8,27 @@ interface MessageListProps {
 }
 
 export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming }) => {
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const isAtBottomRef = useRef(true)
+
+  const checkBottom = useCallback(() => {
+    const el = containerRef.current
+    if (!el) return
+    const threshold = 80
+    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold
+  }, [])
+
+  const scrollToBottom = useCallback((smooth: boolean) => {
+    const el = containerRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'instant' })
+  }, [])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, messages.length > 0 ? (typeof messages[messages.length - 1].content === 'string' ? messages[messages.length - 1].content : '') : ''])
+    if (isAtBottomRef.current) {
+      scrollToBottom(false)
+    }
+  }, [messages, isStreaming, scrollToBottom])
 
   if (messages.length === 0) {
     return (
@@ -34,7 +50,11 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming 
   }
 
   return (
-    <div id="chat-messages" className="flex-1 overflow-y-auto">
+    <div
+      ref={containerRef}
+      className="flex-1 overflow-y-auto"
+      onScroll={checkBottom}
+    >
       {messages.map((msg) => (
         <MessageBubble key={msg.id} message={msg} />
       ))}
@@ -48,7 +68,6 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming 
           <span className="text-xs text-surface-500">Generating...</span>
         </div>
       )}
-      <div ref={bottomRef} />
     </div>
   )
 }

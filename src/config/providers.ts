@@ -2,6 +2,27 @@ import { ProviderConfig } from '@/types/provider'
 
 export const defaultProviders: ProviderConfig[] = [
   {
+    id: 'ollama',
+    name: 'Ollama (本地)',
+    type: 'ollama',
+    apiBaseUrl: 'http://192.168.31.75:8000/v1',
+    apiKey: 'ollama',
+    enabled: true,
+    isLocal: true,
+    models: [
+      {
+        id: 'gemma4-31b-local:latest',
+        name: 'Gemma 4 31B (Q4_K_M)',
+        maxTokens: 131072,
+        supportsVision: true,
+        supportsAudio: false,
+        supportsStreaming: true,
+        supportsToolUse: true,
+        supportsJsonMode: true,
+      },
+    ],
+  },
+  {
     id: 'openai',
     name: 'OpenAI',
     type: 'openai',
@@ -170,26 +191,6 @@ export const defaultProviders: ProviderConfig[] = [
         supportsToolUse: false,
         supportsJsonMode: false,
         pricing: { inputPerMillion: 0.55, outputPerMillion: 2.19 },
-      },
-    ],
-  },
-  {
-    id: 'ollama',
-    name: 'Ollama (Local)',
-    type: 'ollama',
-    apiBaseUrl: 'http://192.168.31.75:8000/v1',
-    apiKey: 'ollama',
-    enabled: true,
-    models: [
-      {
-        id: 'gemma4-31b-local:latest',
-        name: 'Gemma 4 31B (Q4_K_M)',
-        maxTokens: 131072,
-        supportsVision: true,
-        supportsAudio: false,
-        supportsStreaming: true,
-        supportsToolUse: true,
-        supportsJsonMode: true,
       },
     ],
   },

@@ -4,6 +4,7 @@ import { OpenAIProvider } from './openai'
 import { AnthropicProvider } from './anthropic'
 import { GoogleProvider } from './google'
 import { DeepSeekProvider, OllamaProvider } from './deepseek'
+import { LoggingProvider } from './logging'
 
 const providerMap: Record<string, new (config: ProviderConfig) => BaseProvider> = {
   openai: OpenAIProvider,
@@ -19,8 +20,9 @@ class ProviderRegistry {
   register(config: ProviderConfig): BaseProvider {
     const Ctor = providerMap[config.type] || OpenAIProvider
     const provider = new Ctor(config)
-    this.providers.set(config.id, provider)
-    return provider
+    const wrapped = new LoggingProvider(config, provider)
+    this.providers.set(config.id, wrapped)
+    return wrapped
   }
 
   get(id: string): BaseProvider | undefined {

@@ -3,8 +3,8 @@ import { AppSettings } from '@/types'
 export const defaultSettings: AppSettings = {
   theme: 'dark',
   language: 'zh-CN',
-  defaultProvider: 'openai',
-  defaultModel: 'gpt-4o',
+  defaultProvider: 'ollama',
+  defaultModel: 'gemma4-31b-local:latest',
   sendOnEnter: true,
   showTokenCount: true,
   showTimestamp: true,

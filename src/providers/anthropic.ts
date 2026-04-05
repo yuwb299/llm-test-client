@@ -64,6 +64,7 @@ export class AnthropicProvider extends BaseProvider {
         ...this.config.customHeaders,
       },
       body: JSON.stringify(body),
+      signal: params.signal,
     })
 
     if (!res.ok) {
@@ -115,6 +116,7 @@ export class AnthropicProvider extends BaseProvider {
         ...this.config.customHeaders,
       },
       body: JSON.stringify(body),
+      signal: params.signal,
     })
 
     if (!res.ok) {

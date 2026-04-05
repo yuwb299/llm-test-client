@@ -13,13 +13,6 @@ export class OllamaProvider extends OpenAIProvider {
     super(config)
   }
 
-  protected buildHeaders(): Record<string, string> {
-    return {
-      'Content-Type': 'application/json',
-      ...this.config.customHeaders,
-    }
-  }
-
   override async complete(params: import('@/types/provider').ChatCompletionParams) {
     const savedKey = this.config.apiKey
     this.config.apiKey = 'ollama'

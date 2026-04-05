@@ -10,7 +10,7 @@ import { providerRegistry } from '@/providers'
 import { skillRegistry } from '@/skills'
 import { ChatMessage, ContentPart } from '@/types/message'
 import { generateId } from '@/utils/helpers'
-import { Download, ChevronDown } from 'lucide-react'
+import { Download, ChevronDown, Server } from 'lucide-react'
 
 export const ChatPanel: React.FC = () => {
   const {
@@ -66,7 +66,6 @@ export const ChatPanel: React.FC = () => {
       }
 
       const provider = providerRegistry.get(conv.provider)
-      if (!provider) return
 
       const assistantMsg: ChatMessage = {
         id: generateId(),
@@ -77,6 +76,14 @@ export const ChatPanel: React.FC = () => {
         provider: conv.provider,
       }
       addMessage(convId, assistantMsg)
+
+      if (!provider) {
+        updateLastAssistantMessage(
+          convId!,
+          '**Error:** Provider not registered. Please check that the provider is properly configured and enabled in settings.'
+        )
+        return
+      }
 
       setStreaming(true)
       const controller = new AbortController()
@@ -92,22 +99,39 @@ export const ChatPanel: React.FC = () => {
             maxTokens: settings.maxTokens,
             stream: true,
             systemPrompt,
+            signal: controller.signal,
           })
 
           let fullContent = ''
           let finalUsage: ChatMessage['usage']
+          let pendingChunk = ''
+          let rafId: number | null = null
+
+          const flushPending = () => {
+            if (pendingChunk) {
+              appendToLastAssistantMessage(convId!, pendingChunk)
+              pendingChunk = ''
+            }
+            rafId = null
+          }
 
           for await (const chunk of stream) {
             if (controller.signal.aborted) break
             if (chunk.content) {
               fullContent += chunk.content
-              appendToLastAssistantMessage(convId!, chunk.content)
+              pendingChunk += chunk.content
+              if (!rafId) {
+                rafId = requestAnimationFrame(flushPending)
+              }
             }
             if (chunk.usage) {
               finalUsage = chunk.usage
             }
             if (chunk.done) break
           }
+
+          if (rafId) cancelAnimationFrame(rafId)
+          flushPending()
 
           updateLastAssistantMessage(convId!, fullContent, finalUsage)
         } else {
@@ -119,13 +143,18 @@ export const ChatPanel: React.FC = () => {
             maxTokens: settings.maxTokens,
             stream: false,
             systemPrompt,
+            signal: controller.signal,
           })
 
           updateLastAssistantMessage(convId!, response.content, response.usage)
         }
       } catch (error) {
-        const errMsg = error instanceof Error ? error.message : 'Unknown error'
-        updateLastAssistantMessage(convId!, `**Error:** ${errMsg}`)
+        if (controller.signal.aborted) {
+          updateLastAssistantMessage(convId!, '')
+        } else {
+          const errMsg = error instanceof Error ? error.message : 'Unknown error'
+          updateLastAssistantMessage(convId!, `**Error:** ${errMsg}`)
+        }
       } finally {
         setStreaming(false)
         setAbortController(null)
@@ -203,13 +232,19 @@ interface ModelSelectorProps {
 
 const ModelSelector: React.FC<ModelSelectorProps> = ({ selectedModel, selectedProvider, onSelect, onClose }) => {
   const providers = useProviderStore((s) => s.providers)
+  const enabled = providers.filter(p => p.enabled)
+  const local = enabled.filter(p => p.isLocal)
+  const remote = enabled.filter(p => !p.isLocal)
+  const sorted = [...local, ...remote]
 
   return (
     <div className="absolute top-full left-0 mt-1 w-80 max-h-96 overflow-y-auto bg-surface-800 border border-surface-700 rounded-lg shadow-2xl z-50">
-      {providers.filter(p => p.enabled).map((provider) => (
+      {sorted.map((provider) => (
         <div key={provider.id}>
-          <div className="px-3 py-2 text-xs font-semibold text-surface-500 bg-surface-850 sticky top-0">
+          <div className="px-3 py-2 text-xs font-semibold text-surface-500 bg-surface-850 sticky top-0 flex items-center gap-1.5">
+            {provider.isLocal && <Server size={11} className="text-emerald-400" />}
             {provider.name}
+            {provider.isLocal && <span className="text-emerald-400 ml-1">· 本地</span>}
           </div>
           {provider.models.map((model) => (
             <button
@@ -227,6 +262,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ selectedModel, selectedPr
                   <span>{(model.maxTokens / 1000).toFixed(0)}K ctx</span>
                   {model.supportsVision && <span>👁</span>}
                   {model.pricing && <span>${model.pricing.inputPerMillion}/${model.pricing.outputPerMillion}/M</span>}
+                  {provider.isLocal && !model.pricing && <span className="text-emerald-500">免费</span>}
                 </div>
               </div>
             </button>

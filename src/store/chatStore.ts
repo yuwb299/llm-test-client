@@ -90,6 +90,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return { ...c, messages, updatedAt: Date.now() }
       }),
     }))
+    get().persist()
   },
 
   appendToLastAssistantMessage: (conversationId, chunk) => {

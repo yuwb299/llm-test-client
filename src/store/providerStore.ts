@@ -23,8 +23,8 @@ interface ProviderState {
 
 export const useProviderStore = create<ProviderState>((set, get) => ({
   providers: defaultProviders,
-  activeProviderId: 'openai',
-  activeModelId: 'gpt-4o',
+  activeProviderId: 'ollama',
+  activeModelId: 'gemma4-31b-local:latest',
 
   loadFromStorage: () => {
     const providers = loadProviders()
@@ -85,6 +85,6 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
 
   registerAll: () => {
     const { providers } = get()
-    providers.filter((p) => p.enabled && p.apiKey).forEach((p) => providerRegistry.register(p))
+    providers.filter((p) => p.enabled).forEach((p) => providerRegistry.register(p))
   },
 }))

@@ -50,6 +50,7 @@ export class GoogleProvider extends BaseProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...this.config.customHeaders },
       body: JSON.stringify(body),
+      signal: params.signal,
     })
 
     if (!res.ok) {
@@ -91,6 +92,7 @@ export class GoogleProvider extends BaseProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...this.config.customHeaders },
       body: JSON.stringify(body),
+      signal: params.signal,
     })
 
     if (!res.ok) {

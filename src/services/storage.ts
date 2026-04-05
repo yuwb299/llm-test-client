@@ -68,3 +68,36 @@ export function saveMCPServers(servers: MCPServerConfig[]) {
 export function clearAllData() {
   Object.values(STORAGE_KEYS).forEach((key) => localStorage.removeItem(key))
 }
+
+const STORAGE_KEY_EVALUATIONS = 'llm_client_evaluations'
+
+export function loadEvaluations(): EvaluationSession[] {
+  try {
+    const data = localStorage.getItem(STORAGE_KEY_EVALUATIONS)
+    return data ? JSON.parse(data) : []
+  } catch {
+    return []
+  }
+}
+
+export function saveEvaluations(sessions: EvaluationSession[]) {
+  localStorage.setItem(STORAGE_KEY_EVALUATIONS, JSON.stringify(sessions))
+}
+
+import { EvaluationSession } from '@/types/evaluation'
+import { InteractionLog } from '@/types/log'
+
+const STORAGE_KEY_LOGS = 'llm_client_logs'
+
+export function loadLogs(): InteractionLog[] {
+  try {
+    const data = localStorage.getItem(STORAGE_KEY_LOGS)
+    return data ? JSON.parse(data) : []
+  } catch {
+    return []
+  }
+}
+
+export function saveLogs(logs: InteractionLog[]) {
+  localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify(logs))
+}

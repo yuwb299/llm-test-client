@@ -2,7 +2,6 @@ import React from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
-import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
 import rehypeRaw from 'rehype-raw'
 import { CodeBlock } from './CodeBlock'
@@ -12,17 +11,34 @@ interface MarkdownRendererProps {
   className?: string
 }
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, className }) => {
+function extractText(children: React.ReactNode): string {
+  if (typeof children === 'string') return children
+  if (typeof children === 'number') return String(children)
+  if (!children) return ''
+  if (Array.isArray(children)) return children.map(extractText).join('')
+  if (React.isValidElement(children)) return extractText((children.props as any).children)
+  return ''
+}
+
+export const MarkdownRenderer = React.memo(function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
   return (
     <div className={`markdown-body ${className || ''}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeHighlight, rehypeKatex, rehypeRaw]}
+        rehypePlugins={[rehypeKatex, rehypeRaw]}
         components={{
+          pre({ children }) {
+            return <>{children}</>
+          },
           code({ className, children, node, ...props }) {
+            const isMath = node?.data?.meta === 'math' || node?.tagName === 'math'
+            if (isMath) {
+              return <code className={className} {...props}>{children}</code>
+            }
+
             const match = /language-(\w+)/.exec(className || '')
             const language = match ? match[1] : ''
-            const codeStr = String(children).replace(/\n$/, '')
+            const codeStr = extractText(children).replace(/\n$/, '')
 
             if (match || codeStr.includes('\n')) {
               return <CodeBlock language={language} code={codeStr} />
@@ -33,9 +49,6 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
                 {children}
               </code>
             )
-          },
-          pre({ children }) {
-            return <>{children}</>
           },
           table({ children }) {
             return (
@@ -57,4 +70,4 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
       </ReactMarkdown>
     </div>
   )
-}
+})
