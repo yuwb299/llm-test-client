@@ -1,0 +1,120 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #334155 transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 3px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: #475569;
+  }
+}
+
+@layer components {
+  .markdown-body {
+    @apply text-surface-100 leading-relaxed;
+    font-size: inherit;
+    word-break: break-word;
+  }
+
+  .markdown-body p {
+    @apply mb-3 leading-7;
+  }
+
+  .markdown-body h1 {
+    @apply text-2xl font-bold mt-6 mb-3 text-surface-50 border-b border-surface-700 pb-2;
+  }
+
+  .markdown-body h2 {
+    @apply text-xl font-bold mt-5 mb-2 text-surface-50;
+  }
+
+  .markdown-body h3 {
+    @apply text-lg font-semibold mt-4 mb-2 text-surface-100;
+  }
+
+  .markdown-body h4 {
+    @apply text-base font-semibold mt-3 mb-1 text-surface-100;
+  }
+
+  .markdown-body ul, .markdown-body ol {
+    @apply mb-3 pl-6;
+  }
+
+  .markdown-body ul {
+    @apply list-disc;
+  }
+
+  .markdown-body ol {
+    @apply list-decimal;
+  }
+
+  .markdown-body li {
+    @apply mb-1 leading-6;
+  }
+
+  .markdown-body blockquote {
+    @apply border-l-4 border-primary-500 pl-4 py-1 my-3 text-surface-300 bg-surface-800/50 rounded-r;
+  }
+
+  .markdown-body code:not(pre code) {
+    @apply bg-surface-800 text-primary-300 px-1.5 py-0.5 rounded text-sm font-mono;
+  }
+
+  .markdown-body pre {
+    @apply my-3 rounded-lg overflow-hidden;
+  }
+
+  .markdown-body table {
+    @apply w-full border-collapse my-3;
+  }
+
+  .markdown-body th {
+    @apply border border-surface-700 px-3 py-2 bg-surface-800 text-left font-semibold;
+  }
+
+  .markdown-body td {
+    @apply border border-surface-700 px-3 py-2;
+  }
+
+  .markdown-body a {
+    @apply text-primary-400 hover:text-primary-300 underline;
+  }
+
+  .markdown-body hr {
+    @apply border-surface-700 my-4;
+  }
+
+  .markdown-body img {
+    @apply max-w-full rounded-lg my-2;
+  }
+
+  .markdown-body strong {
+    @apply font-semibold text-surface-50;
+  }
+
+  .markdown-body em {
+    @apply italic text-surface-200;
+  }
+
+  .markdown-body .katex-display {
+    @apply my-3 overflow-x-auto;
+  }
+}
