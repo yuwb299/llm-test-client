@@ -3,33 +3,41 @@ import {
   FlaskConical, Play, Plus, Trash2, ChevronDown, ChevronRight,
   Clock, Gauge, Star, FileText, Download, AlertCircle, CheckCircle2,
   XCircle, Loader2, StickyNote, RefreshCw, RotateCcw, Eye,
+  Upload, Wand2, BarChart3, Trophy, Zap, Target, TrendingUp,
 } from 'lucide-react'
-import { useEvaluationStore, QUESTION_TEMPLATES } from '@/store/evaluationStore'
+import { useEvaluationStore } from '@/store/evaluationStore'
 import { useProviderStore } from '@/store/providerStore'
 import { useSettingsStore } from '@/store/settingsStore'
 import { providerRegistry } from '@/providers'
 import { ChatMessage } from '@/types/message'
 import {
   EvaluationRecord, EvaluationMetrics, TestQuestion,
-  QuestionCategory, CATEGORY_LABELS, DIFFICULTY_LABELS,
-  VERDICT_LABELS, VERDICT_COLORS,
+  QuestionCategory, DifficultyLevel, QuestionBankFile,
+  CATEGORY_LABELS, DIFFICULTY_LABELS, DIFFICULTY_COLORS,
+  VERDICT_LABELS, VERDICT_COLORS, ALL_CATEGORIES,
+  EvaluationSummary, CategoryScore, DifficultyScore,
+  getGrade, computeMaxPoints,
 } from '@/types/evaluation'
 import { generateId } from '@/utils/helpers'
 import { MarkdownRenderer } from '@/components/Markdown/MarkdownRenderer'
 
-type EvalTab = 'questions' | 'results' | 'notes'
+type EvalTab = 'questions' | 'results' | 'summary' | 'notes'
+
+const BATCH_SIZE_OPTIONS = [3, 5, 8, 10] as const
+const DIFFICULTY_LEVELS: DifficultyLevel[] = [1, 2, 3, 4, 5]
 
 export const EvaluationPanel: React.FC = () => {
   const {
-    sessions, activeSessionId, isRunning, currentProgress,
+    sessions, activeSessionId, isRunning, currentProgress, phase,
     getActiveSession, createSession, deleteSession, setActiveSession,
-    addRecord, updateRecordNotes, deleteRecord, setRunning, setProgress,
+    addRecord, updateRecordNotes, deleteRecord, updateSessionSummary,
+    setRunning, setProgress, setPhase,
   } = useEvaluationStore()
 
   const [tab, setTab] = useState<EvalTab>('questions')
   const [selectedQuestions, setSelectedQuestions] = useState<Set<string>>(new Set())
   const [categoryFilter, setCategoryFilter] = useState<QuestionCategory | 'all'>('all')
-  const [difficultyFilter, setDifficultyFilter] = useState<string>('all')
+  const [difficultyFilter, setDifficultyFilter] = useState<DifficultyLevel | 'all'>('all')
   const [newSessionName, setNewSessionName] = useState('')
   const [showSessionForm, setShowSessionForm] = useState(false)
   const [localProviderId, setLocalProviderId] = useState('')
@@ -37,20 +45,31 @@ export const EvaluationPanel: React.FC = () => {
   const [judgeProviderId, setJudgeProviderId] = useState('')
   const [judgeModelId, setJudgeModelId] = useState('')
   const [expandedRecord, setExpandedRecord] = useState<string | null>(null)
+
+  const [localQuestions, setLocalQuestions] = useState<TestQuestion[]>([])
   const [customPrompt, setCustomPrompt] = useState('')
-  const [customCategory, setCustomCategory] = useState<QuestionCategory>('custom')
-  const [customDifficulty, setCustomDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium')
-  const [localQuestions, setLocalQuestions] = useState<TestQuestion[]>(
-    QUESTION_TEMPLATES.map((q, i) => ({ ...q, id: `builtin-${i}` }))
-  )
+  const [customCategory, setCustomCategory] = useState<QuestionCategory>('reasoning')
+  const [customDifficulty, setCustomDifficulty] = useState<DifficultyLevel>(3)
+
+  const [genCategories, setGenCategories] = useState<Set<QuestionCategory>>(new Set(ALL_CATEGORIES))
+  const [genDifficultyMin, setGenDifficultyMin] = useState<DifficultyLevel>(1)
+  const [genDifficultyMax, setGenDifficultyMax] = useState<DifficultyLevel>(5)
+  const [genTotalCount, setGenTotalCount] = useState(10)
+  const [genBatchSize, setGenBatchSize] = useState(5)
+
+  const [evalBatchSize, setEvalBatchSize] = useState(5)
 
   const providers = useProviderStore((s) => s.providers)
   const activeProviderId = useProviderStore((s) => s.activeProviderId)
   const activeModelId = useProviderStore((s) => s.activeModelId)
   const settings = useSettingsStore((s) => s.settings)
   const runningRef = useRef(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const activeSession = getActiveSession()
+
+  const enabledProviders = providers.filter((p) => p.enabled && p.apiKey)
+  const localProviders = providers.filter((p) => p.enabled)
 
   const filteredQuestions = localQuestions.filter((q) => {
     if (categoryFilter !== 'all' && q.category !== categoryFilter) return false
@@ -67,11 +86,20 @@ export const EvaluationPanel: React.FC = () => {
     })
   }
 
-  const selectAll = () => {
-    setSelectedQuestions(new Set(filteredQuestions.map((q) => q.id)))
-  }
-
+  const selectAll = () => setSelectedQuestions(new Set(filteredQuestions.map((q) => q.id)))
   const deselectAll = () => setSelectedQuestions(new Set())
+
+  const toggleGenCategory = (c: QuestionCategory) => {
+    setGenCategories((prev) => {
+      const next = new Set(prev)
+      if (next.has(c)) {
+        if (next.size > 1) next.delete(c)
+      } else {
+        next.add(c)
+      }
+      return next
+    })
+  }
 
   const handleAddCustomQuestion = () => {
     if (!customPrompt.trim()) return
@@ -93,6 +121,102 @@ export const EvaluationPanel: React.FC = () => {
     setShowSessionForm(false)
   }
 
+  const buildQuestionGenPrompt = (count: number, cats: QuestionCategory[], dMin: DifficultyLevel, dMax: DifficultyLevel): string => {
+    const catNames = cats.map((c) => `${CATEGORY_LABELS[c]}(${c})`).join('、')
+    const diffRange = dMin === dMax ? DIFFICULTY_LABELS[dMin] : `${DIFFICULTY_LABELS[dMin]}~${DIFFICULTY_LABELS[dMax]}`
+    return `你是一个专业的AI模型测试题目设计专家。请生成 ${count} 道测试题，用于评估AI大模型的能力。
+
+要求：
+- 题目类别范围：${catNames}
+- 难度范围：${diffRange}（1=入门, 2=基础, 3=进阶, 4=困难, 5=专家）
+- 尽量均匀分配各类别和各难度
+- 每道题要有明确的考察点(expectedAspects，2-4个)
+- 题目内容要多样化，避免重复模式
+
+严格按以下JSON格式输出（不要输出其他任何内容）:
+[
+  {
+    "category": "类别英文名",
+    "prompt": "题目内容",
+    "expectedAspects": ["考察点1", "考察点2"],
+    "difficulty": 难度数字1-5
+  }
+]`
+  }
+
+  const parseQuestionsFromResponse = (content: string, prefix: string): TestQuestion[] => {
+    const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
+    const parsed = JSON.parse(jsonStr)
+    if (!Array.isArray(parsed)) throw new Error('not array')
+    return parsed.map((item: any, i: number) => ({
+      id: `${prefix}-${Date.now()}-${i}`,
+      category: ALL_CATEGORIES.includes(item.category) ? item.category : 'reasoning',
+      prompt: String(item.prompt || ''),
+      expectedAspects: Array.isArray(item.expectedAspects) ? item.expectedAspects.map(String) : [],
+      difficulty: (DIFFICULTY_LEVELS.includes(item.difficulty) ? item.difficulty : 3) as DifficultyLevel,
+    }))
+  }
+
+  const generateQuestions = useCallback(async () => {
+    const provId = judgeProviderId || activeProviderId
+    const modId = judgeModelId || activeModelId
+    const provider = providerRegistry.get(provId)
+    if (!provider) {
+      alert('请先配置用于生成题目的在线模型')
+      return
+    }
+
+    setRunning(true)
+    setPhase('generating')
+    runningRef.current = true
+
+    const cats = Array.from(genCategories)
+    const totalRemaining = genTotalCount - localQuestions.length
+    if (totalRemaining <= 0) {
+      setRunning(false)
+      setPhase('idle')
+      return
+    }
+    const totalCount = Math.min(genTotalCount, totalRemaining > 0 ? genTotalCount : genTotalCount)
+
+    let generated: TestQuestion[] = []
+    let remaining = totalCount
+    let batchIndex = 0
+
+    while (remaining > 0 && runningRef.current) {
+      const batchCount = Math.min(remaining, genBatchSize)
+      setProgress({ completed: generated.length, total: totalCount })
+
+      try {
+        const prompt = buildQuestionGenPrompt(batchCount, cats, genDifficultyMin, genDifficultyMax)
+        const msg: ChatMessage = { id: generateId(), role: 'user', content: prompt, timestamp: Date.now() }
+        const response = await provider.complete({
+          model: modId,
+          messages: [msg],
+          temperature: 0.8,
+          maxTokens: 4000,
+          stream: false,
+        })
+        const batch = parseQuestionsFromResponse(response.content, `gen-${batchIndex}`)
+        generated = [...generated, ...batch]
+      } catch (err) {
+        console.error('Batch generation failed:', err)
+      }
+
+      remaining -= batchCount
+      batchIndex++
+    }
+
+    if (generated.length > 0) {
+      setLocalQuestions((prev) => [...prev, ...generated])
+    }
+
+    setRunning(false)
+    runningRef.current = false
+    setPhase('idle')
+    setProgress(null)
+  }, [judgeProviderId, judgeModelId, activeProviderId, activeModelId, genCategories, genDifficultyMin, genDifficultyMax, genTotalCount, genBatchSize, localQuestions.length])
+
   const runEvaluation = useCallback(async () => {
     if (!activeSessionId || selectedQuestions.size === 0) return
 
@@ -104,34 +228,31 @@ export const EvaluationPanel: React.FC = () => {
     const judgeProviderInst = providerRegistry.get(judgeProv)
 
     if (!localProvider || !judgeProviderInst) {
-      alert('请确认本地模型和评判模型均已正确配置')
+      alert('请确认被测模型和评判模型均已正确配置')
       return
     }
 
     setRunning(true)
     runningRef.current = true
     const questions = localQuestions.filter((q) => selectedQuestions.has(q.id))
+    const maxPointsMap = computeMaxPoints(questions)
     setProgress({ completed: 0, total: questions.length })
 
     for (let i = 0; i < questions.length; i++) {
       if (!runningRef.current) break
 
       const question = questions[i]
+      const maxPts = maxPointsMap.get(question.id) || 0
 
       try {
+        setPhase('answering')
         const localStart = performance.now()
         let ttfb = 0
         let fullResponse = ''
         let tokenCount = 0
         let firstChunk = true
 
-        const userMsg: ChatMessage = {
-          id: generateId(),
-          role: 'user',
-          content: question.prompt,
-          timestamp: Date.now(),
-        }
-
+        const userMsg: ChatMessage = { id: generateId(), role: 'user', content: question.prompt, timestamp: Date.now() }
         const stream = localProvider.stream({
           model: localModId,
           messages: [userMsg],
@@ -146,20 +267,15 @@ export const EvaluationPanel: React.FC = () => {
             ttfb = performance.now() - localStart
             firstChunk = false
           }
-          if (chunk.content) {
-            fullResponse += chunk.content
-          }
-          if (chunk.usage?.completionTokens) {
-            tokenCount = chunk.usage.completionTokens
-          }
+          if (chunk.content) fullResponse += chunk.content
+          if (chunk.usage?.completionTokens) tokenCount = chunk.usage.completionTokens
         }
 
         const totalDuration = performance.now() - localStart
-        if (tokenCount === 0) {
-          tokenCount = Math.ceil(fullResponse.length / 3.5)
-        }
+        if (tokenCount === 0) tokenCount = Math.ceil(fullResponse.length / 3.5)
         const tokensPerSecond = totalDuration > 0 ? (tokenCount / (totalDuration / 1000)) : 0
 
+        setPhase('judging')
         const judgeSystemPrompt = `你是一个专业的AI模型评估专家。你需要评估以下AI回复的质量。
 
 评估题目: ${question.prompt}
@@ -180,13 +296,7 @@ ${fullResponse}
   "feedback": "详细的评估反馈，指出优点和不足"
 }`
 
-        const judgeMsg: ChatMessage = {
-          id: generateId(),
-          role: 'user',
-          content: judgeSystemPrompt,
-          timestamp: Date.now(),
-        }
-
+        const judgeMsg: ChatMessage = { id: generateId(), role: 'user', content: judgeSystemPrompt, timestamp: Date.now() }
         const judgeResponse = await judgeProviderInst.complete({
           model: judgeMod,
           messages: [judgeMsg],
@@ -197,9 +307,11 @@ ${fullResponse}
 
         let metrics: EvaluationMetrics
         let judgeFeedback = ''
+        let overallScore = 0
         try {
           const jsonStr = judgeResponse.content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
           const parsed = JSON.parse(jsonStr)
+          overallScore = Math.min(10, Math.max(1, parsed.overall || 0))
           metrics = {
             speed: {
               ttfb: Math.round(ttfb),
@@ -212,13 +324,14 @@ ${fullResponse}
               accuracy: Math.min(10, Math.max(1, parsed.accuracy || 0)),
               completeness: Math.min(10, Math.max(1, parsed.completeness || 0)),
               clarity: Math.min(10, Math.max(1, parsed.clarity || 0)),
-              overall: Math.min(10, Math.max(1, parsed.overall || 0)),
+              overall: overallScore,
             },
+            score: overallScore,
             verdict: parsed.verdict || 'average',
           }
           judgeFeedback = parsed.feedback || ''
         } catch {
-          const overallScore = tokensPerSecond > 10 ? 7 : tokensPerSecond > 5 ? 5 : 3
+          overallScore = tokensPerSecond > 10 ? 7 : tokensPerSecond > 5 ? 5 : 3
           metrics = {
             speed: {
               ttfb: Math.round(ttfb),
@@ -227,10 +340,13 @@ ${fullResponse}
               outputTokens: tokenCount,
             },
             quality: { relevance: overallScore, accuracy: overallScore, completeness: overallScore, clarity: overallScore, overall: overallScore },
+            score: overallScore,
             verdict: overallScore >= 7 ? 'good' : overallScore >= 5 ? 'average' : 'poor',
           }
           judgeFeedback = judgeResponse.content.slice(0, 500)
         }
+
+        const points = Math.round((overallScore / 10) * maxPts)
 
         const record: EvaluationRecord = {
           id: generateId(),
@@ -240,6 +356,8 @@ ${fullResponse}
           localProvider: localProvId,
           response: fullResponse,
           metrics,
+          maxPoints: Math.round(maxPts),
+          points,
           judgeModel: judgeMod,
           judgeProvider: judgeProv,
           judgeFeedback,
@@ -259,8 +377,11 @@ ${fullResponse}
           metrics: {
             speed: { ttfb: 0, tokensPerSecond: 0, totalDurationMs: 0, outputTokens: 0 },
             quality: { relevance: 0, accuracy: 0, completeness: 0, clarity: 0, overall: 0 },
+            score: 0,
             verdict: 'fail',
           },
+          maxPoints: Math.round(maxPts),
+          points: 0,
           judgeModel: judgeMod,
           judgeProvider: judgeProv,
           judgeFeedback: '评估过程出错',
@@ -273,15 +394,143 @@ ${fullResponse}
       setProgress({ completed: i + 1, total: questions.length })
     }
 
+    computeAndUpdateSummary()
+
     setRunning(false)
     runningRef.current = false
+    setPhase('done')
     setProgress(null)
   }, [activeSessionId, selectedQuestions, localQuestions, activeProviderId, activeModelId, localProviderId, localModelId, judgeProviderId, judgeModelId, settings])
+
+  const computeAndUpdateSummary = useCallback(() => {
+    if (!activeSessionId) return
+    const session = useEvaluationStore.getState().sessions.find((s) => s.id === activeSessionId)
+    if (!session || session.records.length === 0) return
+
+    const records = session.records
+    const totalScore = records.reduce((s, r) => s + r.points, 0)
+    const maxScore = records.reduce((s, r) => s + r.maxPoints, 0)
+    const pct = maxScore > 0 ? (totalScore / maxScore) * 100 : 0
+    const gradeInfo = getGrade(pct)
+
+    const catMap = new Map<QuestionCategory, { score: number; max: number; count: number; qualitySum: number }>()
+    const diffMap = new Map<DifficultyLevel, { score: number; max: number; count: number; qualitySum: number }>()
+    for (const r of records) {
+      const cat = r.question.category
+      const diff = r.question.difficulty
+      if (!catMap.has(cat)) catMap.set(cat, { score: 0, max: 0, count: 0, qualitySum: 0 })
+      if (!diffMap.has(diff)) diffMap.set(diff, { score: 0, max: 0, count: 0, qualitySum: 0 })
+      const cs = catMap.get(cat)!
+      cs.score += r.points; cs.max += r.maxPoints; cs.count++; cs.qualitySum += r.metrics.quality.overall
+      const ds = diffMap.get(diff)!
+      ds.score += r.points; ds.max += r.maxPoints; ds.count++; ds.qualitySum += r.metrics.quality.overall
+    }
+
+    const categoryBreakdown: CategoryScore[] = Array.from(catMap.entries()).map(([category, v]) => ({
+      category,
+      score: Math.round(v.score),
+      maxScore: Math.round(v.max),
+      count: v.count,
+      avgQuality: Math.round((v.qualitySum / v.count) * 10) / 10,
+    }))
+
+    const difficultyBreakdown: DifficultyScore[] = Array.from(diffMap.entries()).map(([difficulty, v]) => ({
+      difficulty,
+      score: Math.round(v.score),
+      maxScore: Math.round(v.max),
+      count: v.count,
+      avgQuality: Math.round((v.qualitySum / v.count) * 10) / 10,
+    }))
+
+    const avgTtfb = records.reduce((s, r) => s + r.metrics.speed.ttfb, 0) / records.length
+    const avgTps = records.reduce((s, r) => s + r.metrics.speed.tokensPerSecond, 0) / records.length
+    const avgDur = records.reduce((s, r) => s + r.metrics.speed.totalDurationMs, 0) / records.length
+
+    const verdictDistribution: Record<string, number> = {}
+    for (const r of records) {
+      verdictDistribution[r.metrics.verdict] = (verdictDistribution[r.metrics.verdict] || 0) + 1
+    }
+
+    const strengths: string[] = []
+    const weaknesses: string[] = []
+    for (const cb of categoryBreakdown) {
+      const ratio = cb.maxScore > 0 ? cb.score / cb.maxScore : 0
+      if (ratio >= 0.7) strengths.push(`${CATEGORY_LABELS[cb.category]}: 得分率 ${Math.round(ratio * 100)}%`)
+      else if (ratio < 0.5) weaknesses.push(`${CATEGORY_LABELS[cb.category]}: 得分率 ${Math.round(ratio * 100)}%`)
+    }
+    if (avgTps >= 20) strengths.push(`生成速度快: ${avgTps.toFixed(1)} tokens/s`)
+    else if (avgTps < 8) weaknesses.push(`生成速度较慢: ${avgTps.toFixed(1)} tokens/s`)
+    if (avgTtfb < 1000) strengths.push(`首字延迟低: ${Math.round(avgTtfb)}ms`)
+    else if (avgTtfb > 3000) weaknesses.push(`首字延迟高: ${Math.round(avgTtfb)}ms`)
+
+    let overallVerdict: EvaluationSummary['overallVerdict'] = 'average'
+    if (pct >= 90) overallVerdict = 'excellent'
+    else if (pct >= 75) overallVerdict = 'good'
+    else if (pct >= 50) overallVerdict = 'average'
+    else if (pct >= 30) overallVerdict = 'poor'
+    else overallVerdict = 'fail'
+
+    const summary: EvaluationSummary = {
+      totalScore: Math.round(totalScore),
+      maxScore: Math.round(maxScore),
+      grade: gradeInfo.grade,
+      categoryBreakdown,
+      difficultyBreakdown,
+      avgSpeed: { ttfb: Math.round(avgTtfb), tokensPerSecond: Math.round(avgTps * 10) / 10, totalDurationMs: Math.round(avgDur) },
+      verdictDistribution,
+      overallVerdict,
+      strengths,
+      weaknesses,
+    }
+
+    updateSessionSummary(activeSessionId, summary)
+  }, [activeSessionId, updateSessionSummary])
 
   const stopEvaluation = () => {
     runningRef.current = false
     setRunning(false)
+    setPhase('idle')
     setProgress(null)
+  }
+
+  const exportQuestionBank = () => {
+    const bank: QuestionBankFile = {
+      name: `题库 ${new Date().toLocaleDateString('zh-CN')}`,
+      version: 1,
+      createdAt: Date.now(),
+      questions: localQuestions.map(({ id, ...rest }) => rest),
+    }
+    const blob = new Blob([JSON.stringify(bank, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `question-bank-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const importQuestionBank = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const bank: QuestionBankFile = JSON.parse(ev.target?.result as string)
+        if (!Array.isArray(bank.questions)) throw new Error('invalid')
+        const imported: TestQuestion[] = bank.questions.map((q, i) => ({
+          id: `import-${Date.now()}-${i}`,
+          category: ALL_CATEGORIES.includes(q.category) ? q.category : 'reasoning',
+          prompt: q.prompt || '',
+          expectedAspects: q.expectedAspects || [],
+          difficulty: (DIFFICULTY_LEVELS.includes(q.difficulty) ? q.difficulty : 3) as DifficultyLevel,
+        }))
+        setLocalQuestions((prev) => [...prev, ...imported])
+      } catch {
+        alert('题库文件格式无效')
+      }
+    }
+    reader.readAsText(file)
+    e.target.value = ''
   }
 
   const exportResults = () => {
@@ -296,9 +545,6 @@ ${fullResponse}
     URL.revokeObjectURL(url)
   }
 
-  const localProviders = providers.filter((p) => p.enabled)
-  const enabledProviders = providers.filter((p) => p.enabled && p.apiKey)
-
   return (
     <div className="flex h-full">
       <div className="w-56 h-full bg-surface-900 border-r border-surface-700 flex flex-col shrink-0">
@@ -308,7 +554,6 @@ ${fullResponse}
             <span>评估系统</span>
           </div>
         </div>
-
         <div className="p-2">
           {showSessionForm ? (
             <div className="space-y-2 p-2 bg-surface-800 rounded-lg">
@@ -334,7 +579,6 @@ ${fullResponse}
             </button>
           )}
         </div>
-
         <div className="flex-1 overflow-y-auto px-2">
           {sessions.map((session) => (
             <div
@@ -344,7 +588,7 @@ ${fullResponse}
                   ? 'bg-surface-800 text-surface-100'
                   : 'text-surface-400 hover:bg-surface-800/50 hover:text-surface-300'
               }`}
-              onClick={() => setActiveSession(session.id)}
+              onClick={() => { setActiveSession(session.id); setLocalQuestions([]) }}
             >
               <FlaskConical size={13} className="shrink-0" />
               <div className="flex-1 min-w-0">
@@ -369,7 +613,7 @@ ${fullResponse}
         {activeSession ? (
           <>
             <div className="flex items-center gap-2 px-4 py-2 border-b border-surface-700 bg-surface-900">
-              {(['questions', 'results', 'notes'] as const).map((t) => (
+              {(['questions', 'results', 'summary', 'notes'] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => setTab(t)}
@@ -377,7 +621,7 @@ ${fullResponse}
                     tab === t ? 'bg-surface-700 text-primary-300' : 'text-surface-500 hover:text-surface-300 hover:bg-surface-800'
                   }`}
                 >
-                  {t === 'questions' ? '题库' : t === 'results' ? '结果' : '笔记'}
+                  {t === 'questions' ? '题库' : t === 'results' ? '结果' : t === 'summary' ? '总结' : '笔记'}
                 </button>
               ))}
               <div className="flex-1" />
@@ -404,6 +648,7 @@ ${fullResponse}
                   customCategory={customCategory}
                   customDifficulty={customDifficulty}
                   isRunning={isRunning}
+                  phase={phase}
                   currentProgress={currentProgress}
                   enabledProviders={enabledProviders}
                   localProviders={localProviders}
@@ -413,6 +658,12 @@ ${fullResponse}
                   judgeModelId={judgeModelId}
                   activeProviderId={activeProviderId}
                   activeModelId={activeModelId}
+                  genCategories={genCategories}
+                  genDifficultyMin={genDifficultyMin}
+                  genDifficultyMax={genDifficultyMax}
+                  genTotalCount={genTotalCount}
+                  genBatchSize={genBatchSize}
+                  evalBatchSize={evalBatchSize}
                   onToggleQuestion={toggleQuestion}
                   onSelectAll={selectAll}
                   onDeselectAll={deselectAll}
@@ -424,10 +675,21 @@ ${fullResponse}
                   onAddCustomQuestion={handleAddCustomQuestion}
                   onRun={runEvaluation}
                   onStop={stopEvaluation}
+                  onGenerate={generateQuestions}
                   onLocalProvider={setLocalProviderId}
                   onLocalModel={setLocalModelId}
                   onJudgeProvider={setJudgeProviderId}
                   onJudgeModel={setJudgeModelId}
+                  onToggleGenCategory={toggleGenCategory}
+                  onGenDifficultyMin={setGenDifficultyMin}
+                  onGenDifficultyMax={setGenDifficultyMax}
+                  onGenTotalCount={setGenTotalCount}
+                  onGenBatchSize={setGenBatchSize}
+                  onEvalBatchSize={setEvalBatchSize}
+                  onExportBank={exportQuestionBank}
+                  onImportBank={importQuestionBank}
+                  onClearQuestions={() => setLocalQuestions([])}
+                  fileInputRef={fileInputRef}
                 />
               )}
               {tab === 'results' && (
@@ -439,6 +701,9 @@ ${fullResponse}
                   onDeleteRecord={(recordId) => deleteRecord(activeSession.id, recordId)}
                   sessionId={activeSession.id}
                 />
+              )}
+              {tab === 'summary' && (
+                <SummaryTab session={activeSession} onRecompute={computeAndUpdateSummary} />
               )}
               {tab === 'notes' && (
                 <NotesTab session={activeSession} onUpdateNotes={updateRecordNotes} />
@@ -452,10 +717,10 @@ ${fullResponse}
               <h3 className="text-lg font-semibold text-surface-300">联网大模型在线评估系统</h3>
               <p className="text-sm text-surface-500 max-w-md">
                 使用强大的在线模型（GPT-4o / Claude / Gemini）作为评判，<br />
-                自动评估本地模型的回答质量和生成速度
+                自动生成题库、评估本地模型的回答质量和生成速度
               </p>
               <div className="flex flex-wrap justify-center gap-2 text-xs text-surface-600">
-                {['自动出题', '质量评估', '速度测试', '笔记记录', '结果导出'].map((f) => (
+                {['自动生成题库', '批量评估', '百分制评分', '分类总结', '题库导入导出'].map((f) => (
                   <span key={f} className="px-2 py-1 bg-surface-800 rounded">{f}</span>
                 ))}
               </div>
@@ -473,11 +738,12 @@ interface QuestionsTabProps {
   localQuestions: TestQuestion[]
   selectedQuestions: Set<string>
   categoryFilter: QuestionCategory | 'all'
-  difficultyFilter: string
+  difficultyFilter: DifficultyLevel | 'all'
   customPrompt: string
   customCategory: QuestionCategory
-  customDifficulty: 'easy' | 'medium' | 'hard'
+  customDifficulty: DifficultyLevel
   isRunning: boolean
+  phase: string
   currentProgress: { completed: number; total: number } | null
   enabledProviders: { id: string; name: string; models: { id: string; name: string }[]; apiKey: string }[]
   localProviders: { id: string; name: string; models: { id: string; name: string }[] }[]
@@ -487,36 +753,59 @@ interface QuestionsTabProps {
   judgeModelId: string
   activeProviderId: string
   activeModelId: string
+  genCategories: Set<QuestionCategory>
+  genDifficultyMin: DifficultyLevel
+  genDifficultyMax: DifficultyLevel
+  genTotalCount: number
+  genBatchSize: number
+  evalBatchSize: number
   onToggleQuestion: (id: string) => void
   onSelectAll: () => void
   onDeselectAll: () => void
   onCategoryFilter: (f: QuestionCategory | 'all') => void
-  onDifficultyFilter: (f: string) => void
+  onDifficultyFilter: (f: DifficultyLevel | 'all') => void
   onCustomPrompt: (v: string) => void
   onCustomCategory: (v: QuestionCategory) => void
-  onCustomDifficulty: (v: 'easy' | 'medium' | 'hard') => void
+  onCustomDifficulty: (v: DifficultyLevel) => void
   onAddCustomQuestion: () => void
   onRun: () => void
   onStop: () => void
-  onJudgeProvider: (v: string) => void
-  onJudgeModel: (v: string) => void
+  onGenerate: () => void
   onLocalProvider: (v: string) => void
   onLocalModel: (v: string) => void
+  onJudgeProvider: (v: string) => void
+  onJudgeModel: (v: string) => void
+  onToggleGenCategory: (c: QuestionCategory) => void
+  onGenDifficultyMin: (v: DifficultyLevel) => void
+  onGenDifficultyMax: (v: DifficultyLevel) => void
+  onGenTotalCount: (v: number) => void
+  onGenBatchSize: (v: number) => void
+  onEvalBatchSize: (v: number) => void
+  onExportBank: () => void
+  onImportBank: (e: React.ChangeEvent<HTMLInputElement>) => void
+  onClearQuestions: () => void
+  fileInputRef: React.RefObject<HTMLInputElement>
 }
 
 const QuestionsTab: React.FC<QuestionsTabProps> = ({
   questions, localQuestions, selectedQuestions, categoryFilter, difficultyFilter,
   customPrompt, customCategory, customDifficulty,
-  isRunning, currentProgress, enabledProviders, localProviders,
+  isRunning, phase, currentProgress, enabledProviders, localProviders,
   localProviderId, localModelId, judgeProviderId, judgeModelId, activeProviderId, activeModelId,
+  genCategories, genDifficultyMin, genDifficultyMax, genTotalCount, genBatchSize, evalBatchSize,
   onToggleQuestion, onSelectAll, onDeselectAll,
   onCategoryFilter, onDifficultyFilter,
   onCustomPrompt, onCustomCategory, onCustomDifficulty,
-  onAddCustomQuestion, onRun, onStop, onLocalProvider, onLocalModel, onJudgeProvider, onJudgeModel,
+  onAddCustomQuestion, onRun, onStop, onGenerate,
+  onLocalProvider, onLocalModel, onJudgeProvider, onJudgeModel,
+  onToggleGenCategory, onGenDifficultyMin, onGenDifficultyMax,
+  onGenTotalCount, onGenBatchSize, onEvalBatchSize,
+  onExportBank, onImportBank, onClearQuestions, fileInputRef,
 }) => {
-  const allCategories: QuestionCategory[] = ['reasoning', 'coding', 'math', 'writing', 'knowledge', 'creative', 'instruction_following', 'multilingual', 'safety', 'custom']
   const localProv = localProviders.find((p) => p.id === (localProviderId || activeProviderId))
   const judgeProv = enabledProviders.find((p) => p.id === (judgeProviderId || activeProviderId))
+
+  const phaseLabel = phase === 'generating' ? '正在生成题目...' : phase === 'answering' ? '模型作答中...' : phase === 'judging' ? '评判评分中...' : '处理中...'
 
   return (
     <div className="p-4 space-y-4">
@@ -584,6 +873,113 @@ const QuestionsTab: React.FC<QuestionsTabProps> = ({
         </div>
       </div>
 
+      <div className="bg-surface-900 border border-surface-700 rounded-lg p-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm font-medium text-surface-200">
+            <Wand2 size={14} />
+            <span>自动生成题库</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={onExportBank} disabled={localQuestions.length === 0} className="flex items-center gap-1 px-2 py-1 text-xs text-surface-400 hover:text-surface-200 bg-surface-800 rounded disabled:opacity-30 transition-colors">
+              <Download size={11} /> 导出题库
+            </button>
+            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1 px-2 py-1 text-xs text-surface-400 hover:text-surface-200 bg-surface-800 rounded transition-colors">
+              <Upload size={11} /> 导入题库
+            </button>
+            <input ref={fileInputRef as React.Ref<HTMLInputElement>} type="file" accept=".json" className="hidden" onChange={onImportBank} />
+          </div>
+        </div>
+        <div>
+          <div className="text-xs text-surface-500 mb-1.5">题目类别（可多选）</div>
+          <div className="flex flex-wrap gap-1.5">
+            {ALL_CATEGORIES.map((c) => (
+              <button
+                key={c}
+                onClick={() => onToggleGenCategory(c)}
+                className={`px-2 py-1 rounded text-xs transition-colors ${
+                  genCategories.has(c) ? 'bg-primary-600 text-white' : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
+                }`}
+              >
+                {CATEGORY_LABELS[c]}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="grid grid-cols-4 gap-3">
+          <div>
+            <label className="text-xs text-surface-500 mb-1 block">最低难度</label>
+            <select
+              value={genDifficultyMin}
+              onChange={(e) => {
+                const v = Number(e.target.value) as DifficultyLevel
+                onGenDifficultyMin(v)
+                if (v > genDifficultyMax) onGenDifficultyMax(v)
+              }}
+              className="w-full bg-surface-850 border border-surface-700 rounded px-2 py-1.5 text-sm text-surface-300 focus:outline-none"
+            >
+              {DIFFICULTY_LEVELS.map((d) => (
+                <option key={d} value={d}>{DIFFICULTY_LABELS[d]}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-surface-500 mb-1 block">最高难度</label>
+            <select
+              value={genDifficultyMax}
+              onChange={(e) => {
+                const v = Number(e.target.value) as DifficultyLevel
+                onGenDifficultyMax(v)
+                if (v < genDifficultyMin) onGenDifficultyMin(v)
+              }}
+              className="w-full bg-surface-850 border border-surface-700 rounded px-2 py-1.5 text-sm text-surface-300 focus:outline-none"
+            >
+              {DIFFICULTY_LEVELS.map((d) => (
+                <option key={d} value={d}>{DIFFICULTY_LABELS[d]}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-surface-500 mb-1 block">题目总数</label>
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={genTotalCount}
+              onChange={(e) => onGenTotalCount(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
+              className="w-full bg-surface-850 border border-surface-700 rounded px-2 py-1.5 text-sm text-surface-300 focus:outline-none focus:border-primary-500"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-surface-500 mb-1 block">每批数量</label>
+            <select
+              value={genBatchSize}
+              onChange={(e) => onGenBatchSize(Number(e.target.value))}
+              className="w-full bg-surface-850 border border-surface-700 rounded px-2 py-1.5 text-sm text-surface-300 focus:outline-none"
+            >
+              {BATCH_SIZE_OPTIONS.map((s) => (
+                <option key={s} value={s}>{s} 题/批</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onGenerate}
+            disabled={isRunning}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-primary-600 text-white rounded text-xs hover:bg-primary-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {isRunning && phase === 'generating' ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+            生成题库
+          </button>
+          {localQuestions.length > 0 && (
+            <>
+              <span className="text-xs text-surface-500">当前 {localQuestions.length} 题</span>
+              <button onClick={onClearQuestions} className="text-xs text-red-400 hover:text-red-300">清空</button>
+            </>
+          )}
+        </div>
+      </div>
+
       <div className="flex items-center gap-2 flex-wrap">
         <select
           value={categoryFilter}
@@ -591,19 +987,19 @@ const QuestionsTab: React.FC<QuestionsTabProps> = ({
           className="bg-surface-800 border border-surface-700 rounded px-2 py-1.5 text-sm text-surface-300 focus:outline-none"
         >
           <option value="all">全部类别</option>
-          {allCategories.map((c) => (
+          {ALL_CATEGORIES.map((c) => (
             <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
           ))}
         </select>
         <select
           value={difficultyFilter}
-          onChange={(e) => onDifficultyFilter(e.target.value)}
+          onChange={(e) => onDifficultyFilter(e.target.value === 'all' ? 'all' : (Number(e.target.value) as DifficultyLevel))}
           className="bg-surface-800 border border-surface-700 rounded px-2 py-1.5 text-sm text-surface-300 focus:outline-none"
         >
           <option value="all">全部难度</option>
-          <option value="easy">简单</option>
-          <option value="medium">中等</option>
-          <option value="hard">困难</option>
+          {DIFFICULTY_LEVELS.map((d) => (
+            <option key={d} value={d}>{DIFFICULTY_LABELS[d]}</option>
+          ))}
         </select>
         <div className="flex-1" />
         <span className="text-xs text-surface-500">已选 {selectedQuestions.size}/{localQuestions.length} 题</span>
@@ -633,11 +1029,7 @@ const QuestionsTab: React.FC<QuestionsTabProps> = ({
                 <span className="text-xs px-1.5 py-0.5 bg-surface-800 rounded text-surface-400">
                   {CATEGORY_LABELS[q.category]}
                 </span>
-                <span className={`text-xs px-1.5 py-0.5 rounded ${
-                  q.difficulty === 'easy' ? 'bg-green-500/10 text-green-400' :
-                  q.difficulty === 'medium' ? 'bg-yellow-500/10 text-yellow-400' :
-                  'bg-red-500/10 text-red-400'
-                }`}>
+                <span className={`text-xs px-1.5 py-0.5 rounded bg-surface-800 ${DIFFICULTY_COLORS[q.difficulty]}`}>
                   {DIFFICULTY_LABELS[q.difficulty]}
                 </span>
                 {q.expectedAspects.length > 0 && (
@@ -650,7 +1042,7 @@ const QuestionsTab: React.FC<QuestionsTabProps> = ({
       </div>
 
       <div className="bg-surface-900 border border-surface-700 rounded-lg p-3 space-y-2">
-        <div className="text-sm font-medium text-surface-200">添加自定义题目</div>
+        <div className="text-sm font-medium text-surface-200">手动添加题目</div>
         <textarea
           value={customPrompt}
           onChange={(e) => onCustomPrompt(e.target.value)}
@@ -664,18 +1056,18 @@ const QuestionsTab: React.FC<QuestionsTabProps> = ({
             onChange={(e) => onCustomCategory(e.target.value as QuestionCategory)}
             className="bg-surface-850 border border-surface-700 rounded px-2 py-1 text-xs text-surface-300 focus:outline-none"
           >
-            {allCategories.map((c) => (
+            {ALL_CATEGORIES.map((c) => (
               <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
             ))}
           </select>
           <select
             value={customDifficulty}
-            onChange={(e) => onCustomDifficulty(e.target.value as 'easy' | 'medium' | 'hard')}
+            onChange={(e) => onCustomDifficulty(Number(e.target.value) as DifficultyLevel)}
             className="bg-surface-850 border border-surface-700 rounded px-2 py-1 text-xs text-surface-300 focus:outline-none"
           >
-            <option value="easy">简单</option>
-            <option value="medium">中等</option>
-            <option value="hard">困难</option>
+            {DIFFICULTY_LEVELS.map((d) => (
+              <option key={d} value={d}>{DIFFICULTY_LABELS[d]}</option>
+            ))}
           </select>
           <div className="flex-1" />
           <button
@@ -695,7 +1087,7 @@ const QuestionsTab: React.FC<QuestionsTabProps> = ({
             <Loader2 size={18} className="text-primary-400 animate-spin" />
             <div className="flex-1">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-surface-300">评估进行中...</span>
+                <span className="text-surface-300">{phaseLabel}</span>
                 <span className="text-surface-400">{currentProgress?.completed}/{currentProgress?.total}</span>
               </div>
               <div className="mt-1 h-1.5 bg-surface-800 rounded-full overflow-hidden">
@@ -715,8 +1107,20 @@ const QuestionsTab: React.FC<QuestionsTabProps> = ({
           </>
         ) : (
           <>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-surface-500">每批评估</span>
+              <select
+                value={evalBatchSize}
+                onChange={(e) => onEvalBatchSize(Number(e.target.value))}
+                className="bg-surface-800 border border-surface-700 rounded px-1.5 py-1 text-xs text-surface-300 focus:outline-none"
+              >
+                {BATCH_SIZE_OPTIONS.map((s) => (
+                  <option key={s} value={s}>{s} 题</option>
+                ))}
+              </select>
+            </div>
             <span className="text-xs text-surface-500">
-              将使用在线模型评估 {selectedQuestions.size} 道题目的回答
+              百分制评分 · 已选 {selectedQuestions.size} 题
             </span>
             <div className="flex-1" />
             <button
@@ -757,9 +1161,13 @@ const ResultsTab: React.FC<ResultsTabProps> = ({
     )
   }
 
+  const totalPoints = records.reduce((s, r) => s + r.points, 0)
+  const totalMax = records.reduce((s, r) => s + r.maxPoints, 0)
   const avgSpeed = records.reduce((sum, r) => sum + r.metrics.speed.tokensPerSecond, 0) / records.length
   const avgQuality = records.reduce((sum, r) => sum + r.metrics.quality.overall, 0) / records.length
   const avgTtfb = records.reduce((sum, r) => sum + r.metrics.speed.ttfb, 0) / records.length
+  const pct = totalMax > 0 ? (totalPoints / totalMax) * 100 : 0
+  const gradeInfo = getGrade(pct)
 
   const verdictCounts = records.reduce((acc, r) => {
     acc[r.metrics.verdict] = (acc[r.metrics.verdict] || 0) + 1
@@ -768,15 +1176,18 @@ const ResultsTab: React.FC<ResultsTabProps> = ({
 
   return (
     <div className="p-4 space-y-4">
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-5 gap-3">
+        <StatCard icon={<Trophy size={16} />} label="总得分" value={`${Math.round(totalPoints)}/${Math.round(totalMax)}`} color={gradeInfo.color} />
+        <StatCard icon={<Star size={16} />} label="得分率" value={`${pct.toFixed(1)}%`} color={gradeInfo.color} />
         <StatCard icon={<Gauge size={16} />} label="平均速度" value={`${avgSpeed.toFixed(1)} t/s`} color="text-blue-400" />
         <StatCard icon={<Clock size={16} />} label="平均首字" value={`${avgTtfb.toFixed(0)} ms`} color="text-cyan-400" />
-        <StatCard icon={<Star size={16} />} label="平均质量" value={`${avgQuality.toFixed(1)} / 10`} color="text-yellow-400" />
         <StatCard icon={<FileText size={16} />} label="总记录" value={`${records.length} 条`} color="text-surface-300" />
       </div>
 
       <div className="flex items-center gap-2">
-        <span className="text-xs text-surface-500">分布:</span>
+        <span className={`text-lg font-bold ${gradeInfo.color}`}>{gradeInfo.grade}</span>
+        <span className={`text-sm ${gradeInfo.color}`}>{gradeInfo.label}</span>
+        <span className="text-xs text-surface-700">|</span>
         {Object.entries(verdictCounts).map(([verdict, count]) => (
           <span key={verdict} className={`text-xs px-2 py-0.5 rounded bg-surface-800 ${VERDICT_COLORS[verdict] || 'text-surface-400'}`}>
             {VERDICT_LABELS[verdict] || verdict} {count}
@@ -787,6 +1198,7 @@ const ResultsTab: React.FC<ResultsTabProps> = ({
       <div className="space-y-2">
         {records.map((record) => {
           const expanded = expandedRecord === record.id
+          const rPct = record.maxPoints > 0 ? (record.points / record.maxPoints * 100) : 0
           return (
             <div key={record.id} className="border border-surface-700 rounded-lg overflow-hidden">
               <div
@@ -807,8 +1219,9 @@ const ResultsTab: React.FC<ResultsTabProps> = ({
                     <div className="text-xs text-surface-500">{record.metrics.speed.tokensPerSecond.toFixed(1)} t/s</div>
                     <div className="text-xs text-surface-600">{record.metrics.speed.totalDurationMs}ms</div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-sm font-medium">{record.metrics.quality.overall}/10</div>
+                  <div className="text-right min-w-[60px]">
+                    <div className="text-sm font-medium">{record.points}/{record.maxPoints}</div>
+                    <div className={`text-xs ${rPct >= 70 ? 'text-green-400' : rPct >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>{rPct.toFixed(0)}%</div>
                   </div>
                   <span className={`text-xs font-medium ${VERDICT_COLORS[record.metrics.verdict] || ''}`}>
                     {VERDICT_LABELS[record.metrics.verdict] || record.metrics.verdict}
@@ -837,6 +1250,16 @@ const ResultsTab: React.FC<ResultsTabProps> = ({
                         <ScoreBar label="清晰度" value={record.metrics.quality.clarity} />
                         <ScoreBar label="总评" value={record.metrics.quality.overall} />
                       </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-medium text-surface-400 mb-1.5">得分: {record.points}/{record.maxPoints} ({rPct.toFixed(1)}%)</div>
+                    <div className="h-2 bg-surface-800 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${rPct >= 70 ? 'bg-green-500' : rPct >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`}
+                        style={{ width: `${Math.min(100, rPct)}%` }}
+                      />
                     </div>
                   </div>
 
@@ -886,6 +1309,190 @@ const ResultsTab: React.FC<ResultsTabProps> = ({
   )
 }
 
+interface SummaryTabProps {
+  session: { id: string; records: EvaluationRecord[]; summary: EvaluationSummary | null; name: string }
+  onRecompute: () => void
+}
+
+const SummaryTab: React.FC<SummaryTabProps> = ({ session, onRecompute }) => {
+  if (session.records.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center space-y-2">
+          <BarChart3 size={36} className="mx-auto text-surface-700" />
+          <p className="text-sm text-surface-500">完成评测后将自动生成总结报告</p>
+        </div>
+      </div>
+    )
+  }
+
+  const s = session.summary
+  if (!s) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center space-y-3">
+          <BarChart3 size={36} className="mx-auto text-surface-700" />
+          <p className="text-sm text-surface-500">尚未生成总结</p>
+          <button onClick={onRecompute} className="px-4 py-2 bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-500">
+            生成总结
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  const pct = s.maxScore > 0 ? (s.totalScore / s.maxScore) * 100 : 0
+  const gradeInfo = getGrade(pct)
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="bg-surface-900 border border-surface-700 rounded-lg p-5">
+        <div className="flex items-center gap-4 mb-4">
+          <div className={`text-5xl font-black ${gradeInfo.color}`}>{gradeInfo.grade}</div>
+          <div>
+            <div className="text-xl font-bold text-surface-100">{s.totalScore} / {s.maxScore}</div>
+            <div className={`text-sm ${gradeInfo.color}`}>{pct.toFixed(1)}% · {gradeInfo.label}</div>
+          </div>
+          <div className="flex-1" />
+          <button onClick={onRecompute} className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-surface-400 hover:text-surface-200 bg-surface-800 rounded-lg transition-colors">
+            <RefreshCw size={12} /> 刷新
+          </button>
+        </div>
+        <div className="h-3 bg-surface-800 rounded-full overflow-hidden mb-4">
+          <div
+            className={`h-full rounded-full transition-all ${pct >= 80 ? 'bg-green-500' : pct >= 60 ? 'bg-blue-500' : pct >= 40 ? 'bg-yellow-500' : 'bg-red-500'}`}
+            style={{ width: `${Math.min(100, pct)}%` }}
+          />
+        </div>
+        <div className="grid grid-cols-3 gap-3 text-center">
+          <div>
+            <div className="text-xs text-surface-500">平均速度</div>
+            <div className="text-sm font-medium text-blue-400">{s.avgSpeed.tokensPerSecond} t/s</div>
+          </div>
+          <div>
+            <div className="text-xs text-surface-500">平均首字</div>
+            <div className="text-sm font-medium text-cyan-400">{s.avgSpeed.ttfb} ms</div>
+          </div>
+          <div>
+            <div className="text-xs text-surface-500">平均耗时</div>
+            <div className="text-sm font-medium text-surface-300">{s.avgSpeed.totalDurationMs} ms</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="bg-surface-900 border border-surface-700 rounded-lg p-4">
+          <div className="flex items-center gap-2 text-sm font-medium text-surface-200 mb-3">
+            <Target size={14} />
+            <span>分类得分</span>
+          </div>
+          <div className="space-y-2.5">
+            {s.categoryBreakdown.map((cb) => {
+              const ratio = cb.maxScore > 0 ? (cb.score / cb.maxScore) * 100 : 0
+              return (
+                <div key={cb.category}>
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span className="text-surface-300">{CATEGORY_LABELS[cb.category]}</span>
+                    <span className="text-surface-400">{cb.score}/{cb.maxScore} · 质量 {cb.avgQuality}/10</span>
+                  </div>
+                  <div className="h-2 bg-surface-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${ratio >= 70 ? 'bg-green-500' : ratio >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`}
+                      style={{ width: `${Math.min(100, ratio)}%` }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="bg-surface-900 border border-surface-700 rounded-lg p-4">
+          <div className="flex items-center gap-2 text-sm font-medium text-surface-200 mb-3">
+            <TrendingUp size={14} />
+            <span>难度得分</span>
+          </div>
+          <div className="space-y-2.5">
+            {s.difficultyBreakdown.sort((a, b) => a.difficulty - b.difficulty).map((db) => {
+              const ratio = db.maxScore > 0 ? (db.score / db.maxScore) * 100 : 0
+              return (
+                <div key={db.difficulty}>
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span className={DIFFICULTY_COLORS[db.difficulty]}>{DIFFICULTY_LABELS[db.difficulty]}</span>
+                    <span className="text-surface-400">{db.score}/{db.maxScore} · {db.count}题 · 质量 {db.avgQuality}/10</span>
+                  </div>
+                  <div className="h-2 bg-surface-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${ratio >= 70 ? 'bg-green-500' : ratio >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`}
+                      style={{ width: `${Math.min(100, ratio)}%` }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="bg-surface-900 border border-surface-700 rounded-lg p-4">
+          <div className="flex items-center gap-2 text-sm font-medium text-green-400 mb-3">
+            <Zap size={14} />
+            <span>优势 ({s.strengths.length})</span>
+          </div>
+          {s.strengths.length > 0 ? (
+            <ul className="space-y-1">
+              {s.strengths.map((st, i) => (
+                <li key={i} className="text-xs text-surface-300 flex items-start gap-1.5">
+                  <span className="text-green-400 mt-0.5">+</span> {st}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-surface-600">暂无明显优势</p>
+          )}
+        </div>
+
+        <div className="bg-surface-900 border border-surface-700 rounded-lg p-4">
+          <div className="flex items-center gap-2 text-sm font-medium text-orange-400 mb-3">
+            <AlertCircle size={14} />
+            <span>不足 ({s.weaknesses.length})</span>
+          </div>
+          {s.weaknesses.length > 0 ? (
+            <ul className="space-y-1">
+              {s.weaknesses.map((w, i) => (
+                <li key={i} className="text-xs text-surface-300 flex items-start gap-1.5">
+                  <span className="text-orange-400 mt-0.5">-</span> {w}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-surface-600">暂无明显不足</p>
+          )}
+        </div>
+      </div>
+
+      <div className="bg-surface-900 border border-surface-700 rounded-lg p-4">
+        <div className="flex items-center gap-2 text-sm font-medium text-surface-200 mb-3">
+          <BarChart3 size={14} />
+          <span>评级分布</span>
+        </div>
+        <div className="flex items-center gap-3">
+          {(['excellent', 'good', 'average', 'poor', 'fail'] as const).map((v) => {
+            const count = s.verdictDistribution[v] || 0
+            return (
+              <div key={v} className="flex-1 text-center">
+                <div className={`text-lg font-bold ${VERDICT_COLORS[v]}`}>{count}</div>
+                <div className="text-xs text-surface-500">{VERDICT_LABELS[v]}</div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 interface NotesTabProps {
   session: { id: string; records: EvaluationRecord[]; name: string }
   onUpdateNotes: (sessionId: string, recordId: string, notes: string) => void
@@ -920,7 +1527,7 @@ const NotesTab: React.FC<NotesTabProps> = ({ session, onUpdateNotes }) => {
                 <span className={`text-xs font-medium ${VERDICT_COLORS[record.metrics.verdict]}`}>
                   {VERDICT_LABELS[record.metrics.verdict]}
                 </span>
-                <span className="text-xs text-surface-600">{record.metrics.quality.overall}/10</span>
+                <span className="text-xs text-surface-600">{record.points}/{record.maxPoints}</span>
                 <span className="text-xs text-surface-600">{record.metrics.speed.tokensPerSecond.toFixed(1)} t/s</span>
               </div>
               <textarea

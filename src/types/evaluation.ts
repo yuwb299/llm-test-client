@@ -1,21 +1,19 @@
 export type QuestionCategory =
+  | 'math'
   | 'reasoning'
   | 'coding'
-  | 'math'
   | 'writing'
-  | 'knowledge'
-  | 'creative'
-  | 'instruction_following'
-  | 'multilingual'
-  | 'safety'
-  | 'custom'
+  | 'tool_use'
+  | 'agent'
+
+export type DifficultyLevel = 1 | 2 | 3 | 4 | 5
 
 export interface TestQuestion {
   id: string
   category: QuestionCategory
   prompt: string
   expectedAspects: string[]
-  difficulty: 'easy' | 'medium' | 'hard'
+  difficulty: DifficultyLevel
 }
 
 export interface EvaluationMetrics {
@@ -32,6 +30,7 @@ export interface EvaluationMetrics {
     clarity: number
     overall: number
   }
+  score: number
   verdict: 'excellent' | 'good' | 'average' | 'poor' | 'fail'
 }
 
@@ -43,6 +42,8 @@ export interface EvaluationRecord {
   localProvider: string
   response: string
   metrics: EvaluationMetrics
+  maxPoints: number
+  points: number
   judgeModel: string
   judgeProvider: string
   judgeFeedback: string
@@ -50,31 +51,89 @@ export interface EvaluationRecord {
   createdAt: number
 }
 
+export interface CategoryScore {
+  category: QuestionCategory
+  score: number
+  maxScore: number
+  count: number
+  avgQuality: number
+}
+
+export interface DifficultyScore {
+  difficulty: DifficultyLevel
+  score: number
+  maxScore: number
+  count: number
+  avgQuality: number
+}
+
+export interface EvaluationSummary {
+  totalScore: number
+  maxScore: number
+  grade: string
+  categoryBreakdown: CategoryScore[]
+  difficultyBreakdown: DifficultyScore[]
+  avgSpeed: {
+    ttfb: number
+    tokensPerSecond: number
+    totalDurationMs: number
+  }
+  verdictDistribution: Record<string, number>
+  overallVerdict: 'excellent' | 'good' | 'average' | 'poor' | 'fail'
+  strengths: string[]
+  weaknesses: string[]
+}
+
 export interface EvaluationSession {
   id: string
   name: string
   records: EvaluationRecord[]
+  summary: EvaluationSummary | null
   createdAt: number
   updatedAt: number
 }
 
-export const CATEGORY_LABELS: Record<QuestionCategory, string> = {
-  reasoning: '逻辑推理',
-  coding: '编程能力',
-  math: '数学计算',
-  writing: '写作表达',
-  knowledge: '知识问答',
-  creative: '创意生成',
-  instruction_following: '指令遵循',
-  multilingual: '多语言',
-  safety: '安全合规',
-  custom: '自定义',
+export interface QuestionBankFile {
+  name: string
+  version: number
+  createdAt: number
+  questions: Omit<TestQuestion, 'id'>[]
 }
 
-export const DIFFICULTY_LABELS: Record<string, string> = {
-  easy: '简单',
-  medium: '中等',
-  hard: '困难',
+export const ALL_CATEGORIES: QuestionCategory[] = ['math', 'reasoning', 'coding', 'writing', 'tool_use', 'agent']
+
+export const CATEGORY_LABELS: Record<QuestionCategory, string> = {
+  math: '数学',
+  reasoning: '逻辑推理',
+  coding: '代码能力',
+  writing: '文字能力',
+  tool_use: '工具能力',
+  agent: 'Agent能力',
+}
+
+export const CATEGORY_ICONS: Record<QuestionCategory, string> = {
+  math: '📐',
+  reasoning: '🧠',
+  coding: '💻',
+  writing: '✍️',
+  tool_use: '🔧',
+  agent: '🤖',
+}
+
+export const DIFFICULTY_LABELS: Record<DifficultyLevel, string> = {
+  1: '入门',
+  2: '基础',
+  3: '进阶',
+  4: '困难',
+  5: '专家',
+}
+
+export const DIFFICULTY_COLORS: Record<DifficultyLevel, string> = {
+  1: 'text-green-400',
+  2: 'text-cyan-400',
+  3: 'text-yellow-400',
+  4: 'text-orange-400',
+  5: 'text-red-400',
 }
 
 export const VERDICT_LABELS: Record<string, string> = {
@@ -91,4 +150,22 @@ export const VERDICT_COLORS: Record<string, string> = {
   average: 'text-yellow-400',
   poor: 'text-orange-400',
   fail: 'text-red-400',
+}
+
+export function getGrade(score: number): { grade: string; label: string; color: string } {
+  if (score >= 90) return { grade: 'S', label: '卓越', color: 'text-purple-400' }
+  if (score >= 80) return { grade: 'A', label: '优秀', color: 'text-green-400' }
+  if (score >= 70) return { grade: 'B', label: '良好', color: 'text-blue-400' }
+  if (score >= 60) return { grade: 'C', label: '一般', color: 'text-yellow-400' }
+  if (score >= 40) return { grade: 'D', label: '较差', color: 'text-orange-400' }
+  return { grade: 'F', label: '失败', color: 'text-red-400' }
+}
+
+export function computeMaxPoints(questions: TestQuestion[]): Map<string, number> {
+  const totalWeight = questions.reduce((sum, q) => sum + q.difficulty, 0)
+  const map = new Map<string, number>()
+  for (const q of questions) {
+    map.set(q.id, totalWeight > 0 ? (q.difficulty / totalWeight) * 100 : 0)
+  }
+  return map
 }
