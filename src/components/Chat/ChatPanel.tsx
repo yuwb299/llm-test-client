@@ -32,6 +32,8 @@ export const ChatPanel: React.FC = () => {
 
   const handleSend = useCallback(
     async (content: string | ContentPart[], skillId?: string) => {
+      if (useChatStore.getState().isStreaming) return
+
       let convId = conversation?.id
       if (!convId) {
         convId = createConversation(activeModelId, activeProviderId)
@@ -90,10 +92,14 @@ export const ChatPanel: React.FC = () => {
       setAbortController(controller)
 
       try {
+        const requestMessages = typeof processedContent === 'string' && processedContent !== content
+          ? messages.map((m) => m.id === userMsg.id ? { ...m, content: processedContent } : m)
+          : messages
+
         if (settings.streamEnabled) {
           const stream = provider.stream({
             model: conv.model,
-            messages: [...messages, userMsg],
+            messages: requestMessages,
             temperature: settings.temperature,
             topP: settings.topP,
             maxTokens: settings.maxTokens,
@@ -122,6 +128,7 @@ export const ChatPanel: React.FC = () => {
               pendingChunk += chunk.content
               if (!rafId) {
                 rafId = requestAnimationFrame(flushPending)
+                setTimeout(flushPending, 100)
               }
             }
             if (chunk.usage) {
@@ -137,7 +144,7 @@ export const ChatPanel: React.FC = () => {
         } else {
           const response = await provider.complete({
             model: conv.model,
-            messages: [...messages, userMsg],
+            messages: requestMessages,
             temperature: settings.temperature,
             topP: settings.topP,
             maxTokens: settings.maxTokens,
@@ -150,7 +157,10 @@ export const ChatPanel: React.FC = () => {
         }
       } catch (error) {
         if (controller.signal.aborted) {
-          updateLastAssistantMessage(convId!, '')
+          const partial = useChatStore.getState().conversations
+            .find((c) => c.id === convId)?.messages
+            ?.filter((m) => m.role === 'assistant').slice(-1)[0]?.content
+          updateLastAssistantMessage(convId!, typeof partial === 'string' ? partial : '')
         } else {
           const errMsg = error instanceof Error ? error.message : 'Unknown error'
           updateLastAssistantMessage(convId!, `**Error:** ${errMsg}`)

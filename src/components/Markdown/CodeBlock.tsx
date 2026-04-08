@@ -1,5 +1,7 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import { Copy, Check, ChevronDown, ChevronUp } from 'lucide-react'
+import hljs from 'highlight.js'
+import 'highlight.js/styles/github-dark.css'
 
 interface CodeBlockProps {
   language: string
@@ -16,8 +18,19 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ language, code }) => {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const displayCode = collapsed ? code.split('\n').slice(0, 20).join('\n') + '\n...' : code
   const lineCount = code.split('\n').length
+  const displayCode = collapsed ? code.split('\n').slice(0, 20).join('\n') + '\n...' : code
+
+  const highlighted = useMemo(() => {
+    try {
+      if (language && hljs.getLanguage(language)) {
+        return hljs.highlight(displayCode, { language }).value
+      }
+      return hljs.highlightAuto(displayCode).value
+    } catch {
+      return displayCode
+    }
+  }, [displayCode, language])
 
   return (
     <div className="my-3 rounded-lg overflow-hidden border border-surface-700 bg-surface-900">
@@ -42,9 +55,10 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ language, code }) => {
         </div>
       </div>
       <pre className="!m-0 !rounded-none !border-0">
-        <code className={`language-${language || 'text'} !bg-transparent`}>
-          {displayCode}
-        </code>
+        <code
+          className={`language-${language || 'text'} hljs !bg-transparent`}
+          dangerouslySetInnerHTML={{ __html: highlighted }}
+        />
       </pre>
     </div>
   )

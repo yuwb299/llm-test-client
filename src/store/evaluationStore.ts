@@ -17,6 +17,7 @@ interface EvaluationState {
   addRecord: (sessionId: string, record: EvaluationRecord) => void
   updateRecordNotes: (sessionId: string, recordId: string, notes: string) => void
   deleteRecord: (sessionId: string, recordId: string) => void
+  clearRecords: (sessionId: string) => void
   updateSessionSummary: (sessionId: string, summary: EvaluationSummary) => void
   setRunning: (running: boolean) => void
   setProgress: (progress: { completed: number; total: number } | null) => void
@@ -95,6 +96,17 @@ export const useEvaluationStore = create<EvaluationState>((set, get) => ({
       sessions: s.sessions.map((ses) =>
         ses.id === sessionId
           ? { ...ses, records: ses.records.filter((r) => r.id !== recordId), updatedAt: Date.now() }
+          : ses
+      ),
+    }))
+    get().persist()
+  },
+
+  clearRecords: (sessionId) => {
+    set((s) => ({
+      sessions: s.sessions.map((ses) =>
+        ses.id === sessionId
+          ? { ...ses, records: [], summary: null, updatedAt: Date.now() }
           : ses
       ),
     }))

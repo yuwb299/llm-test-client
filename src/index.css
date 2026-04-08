@@ -117,4 +117,41 @@
   .markdown-body .katex-display {
     @apply my-3 overflow-x-auto;
   }
+
+  .markdown-body .katex {
+    color: #e2e8f0;
+    font-size: 1.05em;
+  }
+
+  .markdown-body .katex-display > .katex {
+    color: #e2e8f0;
+  }
+
+  .markdown-body .katex .mord,
+  .markdown-body .katex .mbin,
+  .markdown-body .katex .mrel,
+  .markdown-body .katex .mop,
+  .markdown-body .katex .mopen,
+  .markdown-body .katex .mclose,
+  .markdown-body .katex .mpunct,
+  .markdown-body .katex .minner {
+    color: #e2e8f0;
+  }
+
+  .markdown-body .katex .mord.text {
+    color: #e2e8f0;
+  }
+
+  .markdown-body .katex-error {
+    color: #f87171 !important;
+    background: rgba(239, 68, 68, 0.1);
+    border-radius: 3px;
+    padding: 0 2px;
+  }
+
+  .markdown-body .math-inline,
+  .markdown-body .math-display,
+  .markdown-body code.language-math {
+    color: #e2e8f0;
+  }
 }

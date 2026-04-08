@@ -30,7 +30,7 @@ export const EvaluationPanel: React.FC = () => {
   const {
     sessions, activeSessionId, isRunning, currentProgress, phase,
     getActiveSession, createSession, deleteSession, setActiveSession,
-    addRecord, updateRecordNotes, deleteRecord, updateSessionSummary,
+    addRecord, updateRecordNotes, deleteRecord, clearRecords, updateSessionSummary,
     setRunning, setProgress, setPhase,
   } = useEvaluationStore()
 
@@ -247,29 +247,22 @@ export const EvaluationPanel: React.FC = () => {
       try {
         setPhase('answering')
         const localStart = performance.now()
-        let ttfb = 0
         let fullResponse = ''
         let tokenCount = 0
-        let firstChunk = true
 
         const userMsg: ChatMessage = { id: generateId(), role: 'user', content: question.prompt, timestamp: Date.now() }
-        const stream = localProvider.stream({
+
+        const response = await localProvider.complete({
           model: localModId,
           messages: [userMsg],
           temperature: settings.temperature,
           topP: settings.topP,
           maxTokens: settings.maxTokens,
-          stream: true,
+          stream: false,
         })
 
-        for await (const chunk of stream) {
-          if (firstChunk && chunk.content) {
-            ttfb = performance.now() - localStart
-            firstChunk = false
-          }
-          if (chunk.content) fullResponse += chunk.content
-          if (chunk.usage?.completionTokens) tokenCount = chunk.usage.completionTokens
-        }
+        fullResponse = response.content || ''
+        tokenCount = response.usage?.completionTokens ?? 0
 
         const totalDuration = performance.now() - localStart
         if (tokenCount === 0) tokenCount = Math.ceil(fullResponse.length / 3.5)
@@ -314,7 +307,7 @@ ${fullResponse}
           overallScore = Math.min(10, Math.max(1, parsed.overall || 0))
           metrics = {
             speed: {
-              ttfb: Math.round(ttfb),
+              ttfb: 0,
               tokensPerSecond: Math.round(tokensPerSecond * 10) / 10,
               totalDurationMs: Math.round(totalDuration),
               outputTokens: tokenCount,
@@ -334,14 +327,20 @@ ${fullResponse}
           overallScore = tokensPerSecond > 10 ? 7 : tokensPerSecond > 5 ? 5 : 3
           metrics = {
             speed: {
-              ttfb: Math.round(ttfb),
+              ttfb: 0,
               tokensPerSecond: Math.round(tokensPerSecond * 10) / 10,
               totalDurationMs: Math.round(totalDuration),
               outputTokens: tokenCount,
             },
-            quality: { relevance: overallScore, accuracy: overallScore, completeness: overallScore, clarity: overallScore, overall: overallScore },
+            quality: {
+              relevance: 5,
+              accuracy: 5,
+              completeness: 5,
+              clarity: 5,
+              overall: overallScore,
+            },
             score: overallScore,
-            verdict: overallScore >= 7 ? 'good' : overallScore >= 5 ? 'average' : 'poor',
+            verdict: 'average',
           }
           judgeFeedback = judgeResponse.content.slice(0, 500)
         }
@@ -699,6 +698,7 @@ ${fullResponse}
                   onToggleRecord={setExpandedRecord}
                   onUpdateNotes={updateRecordNotes}
                   onDeleteRecord={(recordId) => deleteRecord(activeSession.id, recordId)}
+                  onClearRecords={() => clearRecords(activeSession.id)}
                   sessionId={activeSession.id}
                 />
               )}
@@ -1144,11 +1144,12 @@ interface ResultsTabProps {
   onToggleRecord: (id: string | null) => void
   onUpdateNotes: (sessionId: string, recordId: string, notes: string) => void
   onDeleteRecord: (recordId: string) => void
+  onClearRecords: () => void
   sessionId: string
 }
 
 const ResultsTab: React.FC<ResultsTabProps> = ({
-  records, expandedRecord, onToggleRecord, onUpdateNotes, onDeleteRecord, sessionId,
+  records, expandedRecord, onToggleRecord, onUpdateNotes, onDeleteRecord, onClearRecords, sessionId,
 }) => {
   if (records.length === 0) {
     return (
@@ -1193,6 +1194,14 @@ const ResultsTab: React.FC<ResultsTabProps> = ({
             {VERDICT_LABELS[verdict] || verdict} {count}
           </span>
         ))}
+        <div className="flex-1" />
+        <button
+          onClick={() => { if (window.confirm('确定要清空所有评估记录吗？此操作不可撤销。')) onClearRecords() }}
+          className="flex items-center gap-1 px-2.5 py-1 text-xs text-red-400 hover:bg-red-500/10 rounded transition-colors"
+        >
+          <Trash2 size={12} />
+          清空记录
+        </button>
       </div>
 
       <div className="space-y-2">

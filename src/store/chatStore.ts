@@ -23,6 +23,8 @@ interface ChatState {
   persist: () => void
 }
 
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
 export const useChatStore = create<ChatState>((set, get) => ({
   conversations: loadConversations(),
   activeConversationId: null,
@@ -106,6 +108,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return { ...c, messages }
       }),
     }))
+    if (debounceTimer) clearTimeout(debounceTimer)
+    debounceTimer = setTimeout(() => {
+      get().persist()
+      debounceTimer = null
+    }, 2000)
   },
 
   setStreaming: (streaming) => set({ isStreaming: streaming }),
