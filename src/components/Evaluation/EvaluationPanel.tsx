@@ -268,8 +268,35 @@ export const EvaluationPanel: React.FC = () => {
         if (tokenCount === 0) tokenCount = Math.ceil(fullResponse.length / 3.5)
         const tokensPerSecond = totalDuration > 0 ? (tokenCount / (totalDuration / 1000)) : 0
 
-        setPhase('judging')
-        const judgeSystemPrompt = `你是一个专业的AI模型评估专家。你需要评估以下AI回复的质量。
+        const trimmedResponse = fullResponse.trim()
+        const isResponseEmpty = trimmedResponse.length < 10
+
+        let metrics: EvaluationMetrics
+        let judgeFeedback = ''
+        let overallScore = 0
+
+        if (isResponseEmpty) {
+          metrics = {
+            speed: {
+              ttfb: 0,
+              tokensPerSecond: Math.round(tokensPerSecond * 10) / 10,
+              totalDurationMs: Math.round(totalDuration),
+              outputTokens: tokenCount,
+            },
+            quality: {
+              relevance: 0,
+              accuracy: 0,
+              completeness: 0,
+              clarity: 0,
+              overall: 0,
+            },
+            score: 0,
+            verdict: 'fail',
+          }
+          judgeFeedback = '被测试模型未给出有效回答，自动判定为0分'
+        } else {
+          setPhase('judging')
+          const judgeSystemPrompt = `你是一个专业的AI模型评估专家。你需要评估以下AI回复的质量。
 
 评估题目: ${question.prompt}
 题目类别: ${CATEGORY_LABELS[question.category]}
@@ -277,6 +304,8 @@ export const EvaluationPanel: React.FC = () => {
 
 AI的回复:
 ${fullResponse}
+
+重要规则：如果AI的回复内容空洞、没有实质性的回答、完全答非所问、或仅为拒绝/无法回答的套话，则所有评分必须为0或1分，verdict必须为"fail"。
 
 请严格按以下JSON格式输出评估结果（不要输出其他内容）:
 {
@@ -289,60 +318,58 @@ ${fullResponse}
   "feedback": "详细的评估反馈，指出优点和不足"
 }`
 
-        const judgeMsg: ChatMessage = { id: generateId(), role: 'user', content: judgeSystemPrompt, timestamp: Date.now() }
-        const judgeResponse = await judgeProviderInst.complete({
-          model: judgeMod,
-          messages: [judgeMsg],
-          temperature: 0.3,
-          maxTokens: 2000,
-          stream: false,
-        })
+          const judgeMsg: ChatMessage = { id: generateId(), role: 'user', content: judgeSystemPrompt, timestamp: Date.now() }
+          const judgeResponse = await judgeProviderInst.complete({
+            model: judgeMod,
+            messages: [judgeMsg],
+            temperature: 0.3,
+            maxTokens: 2000,
+            stream: false,
+          })
 
-        let metrics: EvaluationMetrics
-        let judgeFeedback = ''
-        let overallScore = 0
-        try {
-          const jsonStr = judgeResponse.content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
-          const parsed = JSON.parse(jsonStr)
-          overallScore = Math.min(10, Math.max(1, parsed.overall || 0))
-          metrics = {
-            speed: {
-              ttfb: 0,
-              tokensPerSecond: Math.round(tokensPerSecond * 10) / 10,
-              totalDurationMs: Math.round(totalDuration),
-              outputTokens: tokenCount,
-            },
-            quality: {
-              relevance: Math.min(10, Math.max(1, parsed.relevance || 0)),
-              accuracy: Math.min(10, Math.max(1, parsed.accuracy || 0)),
-              completeness: Math.min(10, Math.max(1, parsed.completeness || 0)),
-              clarity: Math.min(10, Math.max(1, parsed.clarity || 0)),
-              overall: overallScore,
-            },
-            score: overallScore,
-            verdict: parsed.verdict || 'average',
+          try {
+            const jsonStr = judgeResponse.content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
+            const parsed = JSON.parse(jsonStr)
+            overallScore = Math.min(10, Math.max(0, parsed.overall || 0))
+            metrics = {
+              speed: {
+                ttfb: 0,
+                tokensPerSecond: Math.round(tokensPerSecond * 10) / 10,
+                totalDurationMs: Math.round(totalDuration),
+                outputTokens: tokenCount,
+              },
+              quality: {
+                relevance: Math.min(10, Math.max(0, parsed.relevance || 0)),
+                accuracy: Math.min(10, Math.max(0, parsed.accuracy || 0)),
+                completeness: Math.min(10, Math.max(0, parsed.completeness || 0)),
+                clarity: Math.min(10, Math.max(0, parsed.clarity || 0)),
+                overall: overallScore,
+              },
+              score: overallScore,
+              verdict: parsed.verdict || 'average',
+            }
+            judgeFeedback = parsed.feedback || ''
+          } catch {
+            overallScore = 0
+            metrics = {
+              speed: {
+                ttfb: 0,
+                tokensPerSecond: Math.round(tokensPerSecond * 10) / 10,
+                totalDurationMs: Math.round(totalDuration),
+                outputTokens: tokenCount,
+              },
+              quality: {
+                relevance: 0,
+                accuracy: 0,
+                completeness: 0,
+                clarity: 0,
+                overall: 0,
+              },
+              score: 0,
+              verdict: 'fail',
+            }
+            judgeFeedback = judgeResponse.content.slice(0, 500)
           }
-          judgeFeedback = parsed.feedback || ''
-        } catch {
-          overallScore = tokensPerSecond > 10 ? 7 : tokensPerSecond > 5 ? 5 : 3
-          metrics = {
-            speed: {
-              ttfb: 0,
-              tokensPerSecond: Math.round(tokensPerSecond * 10) / 10,
-              totalDurationMs: Math.round(totalDuration),
-              outputTokens: tokenCount,
-            },
-            quality: {
-              relevance: 5,
-              accuracy: 5,
-              completeness: 5,
-              clarity: 5,
-              overall: overallScore,
-            },
-            score: overallScore,
-            verdict: 'average',
-          }
-          judgeFeedback = judgeResponse.content.slice(0, 500)
         }
 
         const points = Math.round((overallScore / 10) * maxPts)

@@ -1,60 +1,89 @@
 # AGENTS.md - LLM Test Client
 
-## Project Overview
+React-based LLM chat client with multi-provider support (OpenAI, Anthropic, Google, DeepSeek, Ollama), streaming SSE responses, model evaluation, MCP tool integration, and skill-based prompt templates. TypeScript + Vite + Zustand + Tailwind CSS. Single-page app with tab-based navigation (no router). UI language is Chinese (zh-CN).
 
-A React-based LLM chat client supporting multiple providers (OpenAI, Anthropic, Google, DeepSeek, Ollama), streaming responses, model evaluation, MCP tool integration, and skill-based prompt templates. Built with TypeScript, Vite, Zustand, and Tailwind CSS. Single-page app with tab-based navigation (no router). UI language is Chinese (zh-CN).
+## Setup
 
-## Build / Lint / Test Commands
+**`npm install` is required before any other command.** There is no lockfile-committed `node_modules` — the `vite` binary comes from devDependencies.
+
+## Build / Lint / Typecheck
 
 ```bash
-npm run dev              # Start Vite dev server on port 5173
+npm run dev              # Vite dev server on port 5173 (host exposed)
 npm run build            # tsc -b && vite build
-npm run lint             # eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0
 npm run typecheck        # tsc --noEmit
+npm run lint             # eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0
 npm run preview          # Preview production build
 ```
 
-**No test framework is configured.** Do not write tests unless asked to set up a test framework first.
-
-**Always run `npm run typecheck` and `npm run lint` after making changes** to verify correctness.
+- **No test framework.** Do not write tests unless asked.
+- **Always run `npm run typecheck` and `npm run lint` after changes.**
+- No standalone eslint config file — config is likely inline or uses defaults.
 
 ## Project Structure
 
 ```
 src/
-  types/          # TypeScript type definitions (one domain per file; index.ts re-exports some)
-  store/          # Zustand state stores: chatStore, providerStore, settingsStore, logStore, evaluationStore
-  providers/      # LLM providers: BaseProvider abstract class + per-provider implementations
-  components/     # React components in feature folders: Chat/, Settings/, Sidebar/, Markdown/, etc.
-  services/       # Utility services: storage.ts, export.ts, token-counter.ts
-  skills/         # Skill/prompt-template system: base.ts (SkillRegistry), builtin.ts (5 built-in skills)
-  mcp/            # MCP client connecting via external backend at localhost:3001
-  config/         # Defaults (defaults.ts) and provider presets (providers.ts)
-  utils/          # Shared helpers (helpers.ts): generateId, clsx, debounce, readFileAs*, formatFileSize
-  App.tsx         # Root component (default export), three-tab layout
+  types/          # One domain per file; index.ts barrel re-exports some
+  store/          # Zustand stores: chatStore, providerStore, settingsStore, logStore, evaluationStore
+  providers/      # BaseProvider abstract + OpenAI, Anthropic, Google, DeepSeek, Ollama, LoggingProvider
+  components/     # Feature folders: Chat/, Settings/, Sidebar/, Markdown/, Evaluation/, Log/, MCP/, Export/, TokenCounter/
+  services/       # storage.ts, export.ts, token-counter.ts
+  skills/         # SkillRegistry (base.ts) + 5 built-in skills (builtin.ts)
+  mcp/            # MCP client (expects external backend at localhost:3001)
+  config/         # defaults.ts, providers.ts
+  utils/          # helpers.ts: generateId, clsx, debounce, readFileAs*, formatFileSize
+  App.tsx         # Root component (default export), three-tab layout (chat/evaluation/logs)
+  main.tsx        # Entry point, wraps App in StrictMode
   index.css       # Tailwind directives + custom scrollbar + .markdown-body styles
 ```
 
-No `hooks/` directory — custom hooks are not extracted; stateful logic lives in stores or inline in components.
+No `hooks/` directory — stateful logic lives in stores or inline in components.
 
-## Code Style Guidelines
+## Architecture & Patterns
+
+### Provider Pattern
+
+- All providers extend `BaseProvider` (`src/providers/base.ts`). Must implement `complete()`, `stream()` (AsyncGenerator for SSE), `countTokens()`.
+- DeepSeek and Ollama extend `OpenAIProvider` (not BaseProvider directly). Ollama overrides `complete()`/`stream()` to set a dummy API key.
+- `LoggingProvider` (decorator) auto-wraps every registered provider.
+- `ProviderRegistry` singleton (in `src/providers/index.ts`) manages instances, falls back to OpenAI for unknown types.
+- Dev-mode CORS proxy: Vite plugin (`corsProxyPlugin` in vite.config.ts) proxies `/api-proxy` + `X-Proxy-Target` header.
+
+### State Management (Zustand)
+
+- One store per domain, file named `<domain>Store.ts`.
+- Combined state + actions interface at top of file.
+- Manual `persist()` methods writing to localStorage — no Zustand persist middleware.
+- Stores eagerly load from storage at creation time.
+- `appendToLastAssistantMessage` debounces persistence (2000ms).
+- Selectors: `useChatStore((s) => s.conversations)`. External: `useChatStore.getState()`.
+
+### Skill System
+
+- `SkillDefinition` interface in `skills/base.ts`; `SkillRegistry` singleton with Map storage.
+- Built-in skills registered at app startup via `registerBuiltinSkills()` (called in `App.tsx` useEffect).
+- Skills inject `systemPrompt` and optionally `processMessage()`.
+
+### Storage
+
+- All persistence via `localStorage` with `llm_client_` prefix (keys in `src/services/storage.ts`).
+
+## Code Conventions
 
 ### TypeScript
 
-- **Strict mode** enabled. Target ES2020, module resolution `bundler`, JSX `react-jsx`.
-- `noFallthroughCasesInSwitch: true`, `forceConsistentCasingInFileNames: true`.
-- `noUnusedLocals` and `noUnusedParameters` are `false`, but avoid unused variables when practical.
-- Use `interface` for object shapes; `type` for unions, intersections, and aliases.
-- Prefer explicit return types on exported functions and class methods.
-- Use `Record<string, unknown>` for loosely-typed objects; minimize `any`.
-- Timestamps are `number` (Unix ms via `Date.now()`). IDs are `string` via `generateId()`.
+- Strict mode, target ES2020, module resolution `bundler`, JSX `react-jsx`.
+- `noUnusedLocals` and `noUnusedParameters` are `false`.
+- `interface` for objects; `type` for unions/intersections/aliases.
+- Timestamps: `number` (Unix ms). IDs: `string` via `generateId()`.
+- Avoid `any`; use `Record<string, unknown>` for loose objects.
 
 ### Imports
 
-- Use the `@/` path alias for all internal imports (configured in tsconfig and vite.config.ts).
-- **Order**: React/external libs first, then `@/` internal modules.
-- Named imports only; avoid `import * as`.
-- Import types directly from their file (e.g., `@/types/message`), not from the barrel `@/types`.
+- `@/` path alias for all internal imports (configured in tsconfig + vite.config.ts).
+- Order: React/external first, then `@/` internal.
+- Named imports only. Import types from their file (e.g. `@/types/message`), not the barrel.
 
 ```typescript
 import React, { useState, useCallback } from 'react'
@@ -64,91 +93,51 @@ import { useChatStore } from '@/store/chatStore'
 import { generateId } from '@/utils/helpers'
 ```
 
-### Formatting
-
-- 2-space indentation, single quotes, semicolons, trailing commas in multi-line structures.
-
 ### React Components
 
-- Use `React.FC` with a co-located `<Name>Props` interface above the component.
+- `React.FC` with co-located `<Name>Props` interface above.
 - Named exports for all components; only `App` uses `export default`.
-- One component per file; private helper components (e.g., `ModelSelector`) co-located in the same file.
-- `React.memo` for performance-critical render-heavy components (e.g., `MessageBubble`, `MarkdownRenderer`).
 - Feature-folder layout: `src/components/<Feature>/<Component>.tsx`.
+- `React.memo` for render-heavy components (`MessageBubble`, `MarkdownRenderer`).
 
-### State Management (Zustand)
+### Formatting
 
-- One store per domain. Files named `<domain>Store.ts`.
-- Combined state + actions interface at top of file.
-- Pattern: `create<State>((set, get) => ({...}))`. Immutable updates via spread/map/filter.
-- Manual `persist()` method per store writing to localStorage. No Zustand middleware.
-- Debounced persistence where needed (e.g., `appendToLastAssistantMessage` debounces 2000ms).
-- Selectors: `useChatStore((s) => s.conversations)`. External access: `useChatStore.getState()`.
-- Initialization eagerly loads from storage at creation time; settings merge with defaults.
+- 2-space indent, single quotes, semicolons, trailing commas in multi-line.
 
-### Provider Pattern
+### Naming
 
-- All providers extend `BaseProvider` (`src/providers/base.ts`).
-- Must implement: `complete()`, `stream()` (AsyncGenerator for SSE), `countTokens()`.
-- DeepSeek and Ollama extend `OpenAIProvider` (not BaseProvider directly).
-- `LoggingProvider` (decorator) auto-wraps every registered provider via `ProviderRegistry`.
-- `ProviderRegistry` singleton manages provider instances, falls back to OpenAI for unknown types.
-- Local model support uses a Vite CORS proxy plugin (`/api-proxy` + `X-Proxy-Target` header) in dev mode.
+- Files: PascalCase (components), camelCase (utilities/stores).
+- Store hooks: `use` prefix (`useChatStore`). Singletons: camelCase (`providerRegistry`, `skillRegistry`).
+- Constants: UPPER_SNAKE_CASE.
 
-### Skill System
+### Error Handling
 
-- `SkillDefinition` interface in `skills/base.ts`; `SkillRegistry` class with Map storage.
-- `skillRegistry` singleton; built-in skills registered at app startup via `registerBuiltinSkills()`.
-- Skills inject `systemPrompt` and optionally `processMessage()` to transform user input.
+- `try/catch` with graceful fallbacks for I/O.
+- API error pattern: `res.json().catch(() => ({ error: { message: res.statusText } }))`.
+- Empty `catch {}` acceptable for best-effort operations.
 
 ### Styling
 
 - Tailwind CSS 3, dark mode via `'class'` strategy.
-- Custom colors: `primary` (blue scale), `surface` (dark slate, includes custom `850` shade).
-- Tailwind utility classes inline in JSX. No CSS modules or styled-components.
-- `.markdown-body` in `index.css` for rendered LLM output (headings, code blocks, tables, KaTeX).
-- Conditional classes via `clsx()` from `@/utils/helpers`.
+- Custom colors: `primary` (blue), `surface` (dark slate with custom `850` shade).
 - Common palette: `surface-300/400/500` for text, `surface-700/800/850/900/950` for backgrounds, `primary-300/500` for accents.
+- Conditional classes via `clsx()` from `@/utils/helpers`.
 
-### Error Handling
-
-- `try/catch` with graceful fallbacks for I/O (localStorage, JSON, API calls).
-- API error pattern:
-  ```typescript
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: { message: res.statusText } }))
-    throw new Error(err.error?.message || `API Error: ${res.status}`)
-  }
-  ```
-- Catch unknown errors: `error instanceof Error ? error.message : String(error)`.
-- Empty `catch {}` acceptable for best-effort operations (e.g., malformed SSE chunks).
-
-### Naming Conventions
-
-- **Files/folders**: PascalCase for components (`ChatPanel.tsx`), camelCase for utilities/stores (`chatStore.ts`).
-- **Components**: PascalCase. **Functions/variables**: camelCase. **Types/interfaces**: PascalCase.
-- **Constants**: UPPER_SNAKE_CASE (`STORAGE_KEYS`), camelCase for config objects (`defaultSettings`).
-- **Store hooks**: `use` prefix (`useChatStore`). **Singletons**: camelCase (`providerRegistry`, `skillRegistry`).
-
-### Storage
-
-- All persistence via `localStorage` with `llm_client_` prefixed keys (`src/services/storage.ts`).
-- Load functions have try/catch returning sensible defaults. Save functions assume localStorage is available.
-
-### Key Libraries
+## Key Libraries
 
 | Purpose | Library |
 |---------|---------|
 | State | zustand |
 | Icons | lucide-react |
-| Markdown | react-markdown, remark-gfm, remark-math, rehype-highlight, rehype-katex, rehype-raw |
-| Tokens | js-tiktoken (lazy-loaded, fallback heuristic) |
+| Markdown rendering | react-markdown, remark-gfm, remark-math, rehype-highlight, rehype-katex, rehype-raw |
+| Token counting | js-tiktoken (lazy-loaded, heuristic fallback) |
 | Export | file-saver, jspdf, html2canvas |
-| IDs | generateId() from helpers (timestamp-random, uuid package is unused) |
 
-### Important Notes
+## Gotchas
 
-- UI strings are hardcoded Chinese (zh-CN). Code comments, variables, and commits in English.
-- No React error boundaries, no router library, no test framework.
-- Async generators (`async function*`) are used for SSE streaming in providers.
-- `import.meta.env.DEV` is used for the local model CORS proxy (dev mode only).
+- `uuid` is in dependencies but unused — IDs use `generateId()` (timestamp-random).
+- UI strings are hardcoded Chinese (zh-CN). Code, variables, commits in English.
+- No React error boundaries, no router, no test framework.
+- Async generators (`async function*`) for SSE streaming in providers.
+- `import.meta.env.DEV` gates the CORS proxy (dev only).
+- App starts in dark mode (`class="dark"` on `<html>` in index.html).

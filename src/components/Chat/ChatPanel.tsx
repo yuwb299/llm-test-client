@@ -89,6 +89,7 @@ export const ChatPanel: React.FC = () => {
 
       setStreaming(true)
       const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 300000)
       setAbortController(controller)
 
       try {
@@ -110,6 +111,7 @@ export const ChatPanel: React.FC = () => {
 
           let fullContent = ''
           let finalUsage: ChatMessage['usage']
+          let finalFinishReason: string | undefined
           let pendingChunk = ''
           let rafId: number | null = null
 
@@ -134,11 +136,18 @@ export const ChatPanel: React.FC = () => {
             if (chunk.usage) {
               finalUsage = chunk.usage
             }
+            if (chunk.finishReason) {
+              finalFinishReason = chunk.finishReason
+            }
             if (chunk.done) break
           }
 
           if (rafId) cancelAnimationFrame(rafId)
           flushPending()
+
+          if (finalFinishReason === 'length') {
+            fullContent += '\n\n> ⚠️ **回答已因达到最大 Token 限制而被截断。** 可以在设置中增大「最大 Tokens」值以获得更完整的回答。'
+          }
 
           updateLastAssistantMessage(convId!, fullContent, finalUsage)
         } else {
@@ -153,7 +162,12 @@ export const ChatPanel: React.FC = () => {
             signal: controller.signal,
           })
 
-          updateLastAssistantMessage(convId!, response.content, response.usage)
+          let content = response.content
+          if (response.finishReason === 'length') {
+            content += '\n\n> ⚠️ **回答已因达到最大 Token 限制而被截断。** 可以在设置中增大「最大 Tokens」值以获得更完整的回答。'
+          }
+
+          updateLastAssistantMessage(convId!, content, response.usage)
         }
       } catch (error) {
         if (controller.signal.aborted) {
@@ -163,9 +177,14 @@ export const ChatPanel: React.FC = () => {
           updateLastAssistantMessage(convId!, typeof partial === 'string' ? partial : '')
         } else {
           const errMsg = error instanceof Error ? error.message : 'Unknown error'
-          updateLastAssistantMessage(convId!, `**Error:** ${errMsg}`)
+          const partial = useChatStore.getState().conversations
+            .find((c) => c.id === convId)?.messages
+            ?.filter((m) => m.role === 'assistant').slice(-1)[0]?.content
+          const preserved = typeof partial === 'string' && partial.length > 0 ? partial : ''
+          updateLastAssistantMessage(convId!, preserved ? `${preserved}\n\n> ⚠️ **错误:** ${errMsg}` : `**Error:** ${errMsg}`)
         }
       } finally {
+        clearTimeout(timeoutId)
         setStreaming(false)
         setAbortController(null)
       }

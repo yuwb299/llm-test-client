@@ -13,5 +13,5 @@ export const defaultSettings: AppSettings = {
   streamEnabled: true,
   temperature: 0.7,
   topP: 1.0,
-  maxTokens: 4096,
+  maxTokens: 8192,
 }

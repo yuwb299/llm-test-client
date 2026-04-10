@@ -22,9 +22,69 @@ function extractText(children: React.ReactNode): string {
 }
 
 function preprocessMathContent(content: string): string {
-  const parts = content.split(/(```[\s\S]*?```|`[^`\n]+`)/g)
+  // Step 1: Remove editor paste markers first
+  let text = content.replace(/\[Pasted\s+~?\d+\s+lines?\]/gi, '')
+  
+  // Step 2: Normalize LaTeX delimiters - convert \[...\] to $$...$$
+  // Use a loop to handle nested/overlapping matches
+  let prevText = ''
+  while (prevText !== text) {
+    prevText = text
+    text = text.replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$')
+  }
+  
+  // Step 3: Normalize \(...\) to $...$
+  prevText = ''
+  while (prevText !== text) {
+    prevText = text
+    text = text.replace(/\\\(([\s\S]*?)\\\)/g, '$$$$1$$')
+  }
+  
+  // Step 4: Fix inline math delimiters inside display math
+  // Replace $...$ inside $$...$$ with \( ... \) to avoid conflicts
+  text = text.replace(/(\$\$[\s\S]*?)\$([^$\n]+)\$(?=.*?\$\$)/g, '$1\\\\($2\\\\)')
+  
+  // Step 5: Handle math environments
+  const mathEnvNames = [
+    'equation', 'equation\\*',
+    'align', 'align\\*',
+    'aligned', 'gather', 'gather\\*',
+    'gathered', 'cases', 'array',
+    'matrix', 'bmatrix', 'pmatrix',
+    'vmatrix', 'Vmatrix',
+  ]
+  
+  for (const envName of mathEnvNames) {
+    const re = new RegExp(
+      `(?<!\\\$)\\\\begin\{${envName}\}([\s\S]*?)\\\\end\{${envName}\}(?!\\\$)`,
+      'g',
+    )
+    text = text.replace(re, (match) => {
+      // Check context: count $$ before and after this match
+      const matchIndex = text.indexOf(match)
+      if (matchIndex === -1) return match
+      
+      const beforeMatch = text.slice(0, matchIndex)
+      const afterMatch = text.slice(matchIndex + match.length)
+      const openCount = (beforeMatch.match(/\$\$/g) || []).length
+      const closeCount = (afterMatch.match(/\$\$/g) || []).length
+      
+      // If already inside math block (unbalanced), don't wrap
+      if (openCount !== closeCount) {
+        return match
+      }
+      return `$$${match}$$`
+    })
+  }
+  
+  // Step 6: Handle standalone \begin...\end blocks that might have been missed
+  text = text.replace(/(?<!\\\$)(\\\\begin\{[^}]+\}[\s\S]*?\\\\end\{[^}]+\})(?!\\\$)/g, '$$$$$1$$$$')
+  
+  // Step 7: Split by code blocks and process non-code parts
+  const parts = text.split(/(```[\s\S]*?```|`[^`\n]+`)/g)
 
   return parts.map((part, index) => {
+    // Code blocks (odd indices) - check for ```math
     if (index % 2 === 1) {
       const mathBlockMatch = part.match(/^```math\s*\n?([\s\S]*?)```$/)
       if (mathBlockMatch) {
@@ -33,25 +93,14 @@ function preprocessMathContent(content: string): string {
       return part
     }
 
-    let text = part
-    text = text.replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `$$${m}$$`)
-    text = text.replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m}$`)
-
-    const mathEnvNames = [
-      'equation', 'equation\\*',
-      'align', 'align\\*',
-      'aligned', 'gather', 'gather\\*',
-      'gathered', 'cases',
-    ]
-    for (const envName of mathEnvNames) {
-      const re = new RegExp(
-        `(?<!\\$)\\\\begin\\{${envName}\\}([\\s\\S]*?)\\\\end\\{${envName}\\}(?!\\$)`,
-        'g',
-      )
-      text = text.replace(re, (match, m) => `$$${match}$$`)
-    }
-
-    return text
+    // Non-code parts - additional cleanup
+    let processed = part
+    
+    // Fix common issues with broken math delimiters
+    // Ensure display math blocks are properly separated
+    processed = processed.replace(/\$\$\s*\$\$/g, '') // Remove empty blocks
+    
+    return processed
   }).join('')
 }
 

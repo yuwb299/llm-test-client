@@ -611,11 +611,16 @@ const GeneralSettings: React.FC = () => {
         <span className="text-sm text-surface-400 ml-2 w-8">{settings.temperature}</span>
       </SettingRow>
       <SettingRow label="最大 Tokens">
-        <input
-          type="number" value={settings.maxTokens}
-          onChange={(e) => updateSettings({ maxTokens: parseInt(e.target.value) || 4096 })}
-          className="w-24 bg-surface-900 border border-surface-700 rounded px-2 py-1 text-sm text-surface-300"
-        />
+        <div className="flex flex-col items-end gap-1">
+          <input
+            type="number" value={settings.maxTokens}
+            onChange={(e) => updateSettings({ maxTokens: parseInt(e.target.value) || 4096 })}
+            className="w-24 bg-surface-900 border border-surface-700 rounded px-2 py-1 text-sm text-surface-300"
+            min="1"
+            max="32768"
+          />
+          <span className="text-xs text-surface-500">本地模型可设置更大值（如8192-32768）</span>
+        </div>
       </SettingRow>
       <SettingRow label="字体大小">
         <input
